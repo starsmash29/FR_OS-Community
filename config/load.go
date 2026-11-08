@@ -285,12 +285,12 @@ func parseZones(raw Value) Ordered[Zone] {
 		fail("'zones' must be a mapping of zone name -> settings")
 	}
 	var zones Ordered[Zone]
-	for _, name := range m.Keys() {
-		requireName(name, "zone")
+	for i, key := range m.Keys() {
+		name := requireName(key, "zone")
 		if name == SelfZone {
 			fail("Zone name %s is reserved", strRepr(SelfZone))
 		}
-		body := m.vals[name]
+		body := m.vals[i]
 		if !truthy(body) {
 			body = NewMap()
 		}
@@ -310,9 +310,9 @@ func parseInterfaces(raw Value, zones *Ordered[Zone], tunnel map[string]bool) Or
 	}
 	var out Ordered[Interface]
 	seenDevices := map[string]string{}
-	for _, name := range m.Keys() {
-		requireName(name, "interface")
-		body, ok := asMap(m.vals[name])
+	for i, key := range m.Keys() {
+		name := requireName(key, "interface")
+		body, ok := asMap(m.vals[i])
 		if !ok {
 			fail("Interface %s settings must be a mapping", strRepr(name))
 		}
@@ -477,15 +477,19 @@ func parseRules(raw Value, zones *Ordered[Zone], tz string) []Rule {
 }
 
 // parseExpiry is a rule's expiry (security-lessons K2) as Unix time: an
-// ISO 8601 date and time; without an offset it is read in tz (else the
-// router's zone, Local).
+// ISO 8601 date and time, or YAML's own timestamp; without an offset it
+// is read in tz (else the router's zone, Local).
 func parseExpiry(v Value, tz string, what string) int64 {
-	s, ok := v.(string)
-	if !ok {
-		fail("%s: expected a date and time like 2026-10-01T18:00, got %s", what, repr(v))
-	}
-	m, err := fromISOFormat(pyStrip(s))
-	if err != nil {
+	var m isoMoment
+	switch x := v.(type) {
+	case Datetime: // YAML's own timestamp
+		m = x.moment()
+	case string:
+		var err error
+		if m, err = fromISOFormat(pyStrip(x)); err != nil {
+			fail("%s: expected a date and time like 2026-10-01T18:00, got %s", what, repr(v))
+		}
+	default:
 		fail("%s: expected a date and time like 2026-10-01T18:00, got %s", what, repr(v))
 	}
 	loc := Local
@@ -697,11 +701,12 @@ func parseDhcp(raw Value, zones *Ordered[Zone], interfaces *Ordered[Interface]) 
 		byZone[i.Zone] = append(byZone[i.Zone], i)
 	}
 	var dhcp DhcpConfig
-	for _, zone := range m.Keys() {
-		if !zones.Has(zone) {
-			fail("dhcp: undefined zone %s", strRepr(zone))
+	for i, key := range m.Keys() {
+		if !inZones(key, zones) {
+			fail("dhcp: undefined zone %s", repr(key))
 		}
-		body, ok := asMap(m.vals[zone])
+		zone := key.(string)
+		body, ok := asMap(m.vals[i])
 		if !ok {
 			fail("dhcp[%s] must be a mapping", strRepr(zone))
 		}
@@ -1001,14 +1006,15 @@ func parseIPv6(raw Value, cfg *Config) Ipv6Config {
 	return c
 }
 
-func unknownKeys(m *Map, known ...string) []string {
-	var out []string
+// unknownKeys is `sorted(set(m) - known)`, nil when there are none.
+func unknownKeys(m *Map, known ...string) []Value {
+	var out []Value
 	for _, k := range m.Keys() {
-		if !slices.Contains(known, k) {
+		if s, ok := k.(string); !ok || !slices.Contains(known, s) {
 			out = append(out, k)
 		}
 	}
-	sort.Strings(out)
+	pySort(out)
 	return out
 }
 
@@ -1547,12 +1553,12 @@ func parseAdblocker(raw Value, dhcp *DhcpConfig) AdblockerConfig {
 	c := AdblockerConfig{Enabled: boolKey(m, "enabled", false, "adblocker.enabled must be a boolean")}
 	c.SourceURLs = parseURLList(m.get("source_urls", []Value{}), "adblocker.source_urls")
 	cats := mapOf(m.getOr("categories", NewMap()), "adblocker.categories must be a mapping of category name -> list of URLs")
-	for _, name := range cats.Keys() {
-		requireName(name, "adblocker category")
+	for i, key := range cats.Keys() {
+		name := requireName(key, "adblocker category")
 		if name == "ads" {
 			fail("adblocker.categories: 'ads' is reserved for the base list (adblocker.source_urls)")
 		}
-		urls := parseURLList(cats.vals[name], "adblocker.categories."+name)
+		urls := parseURLList(cats.vals[i], "adblocker.categories."+name)
 		if len(urls) == 0 {
 			fail("adblocker.categories.%s has no URLs", name)
 		}
@@ -1780,9 +1786,9 @@ func parseLocalDNS(raw Value, adblocker *AdblockerConfig, apps *AppControlConfig
 	for _, key := range []string{"hosts", "overrides"} {
 		table := mapOf(m.getOr(key, NewMap()), fmt.Sprintf("local_dns.%s must be a mapping of name -> IPv4 address", key))
 		var out Ordered[string]
-		for _, raw := range table.Keys() {
+		for i, raw := range table.Keys() {
 			name := localDNSName(raw, "local_dns."+key, true)
-			ip := validateAddress(table.vals[raw], fmt.Sprintf("local_dns.%s.%s", key, name))
+			ip := validateAddress(table.vals[i], fmt.Sprintf("local_dns.%s.%s", key, name))
 			if out.Has(name) {
 				fail("local_dns.%s: %s is listed twice", key, strRepr(name))
 			}

@@ -73,5 +73,36 @@ func load[T any](name string) ([]T, error) {
 // ConfigCases is every recorded parse_config call.
 func ConfigCases() ([]ConfigCase, error) { return load[ConfigCase]("config.jsonl") }
 
+// YAMLCase is one yaml.safe_load of a text: the value PyYAML built,
+// tagged with its Python type ({"int": "5"}, {"map": [[k, v]...]},
+// {"date": ...}; a bare JSON string, bool, null or array is itself), or
+// the error. Crash names an exception that isn't a YAMLError (1.x
+// crashes); Recursive is a value that contains itself.
+type YAMLCase struct {
+	ID        string         `json:"id"`
+	Input     string         `json:"input"`
+	OK        bool           `json:"ok"`
+	Value     jsontext.Value `json:"value,omitempty"`
+	Recursive bool           `json:"recursive,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	Crash     string         `json:"crash,omitempty"`
+}
+
+// YAMLConfigCase is parse_config of what yaml.safe_load built from a
+// text: accepted, refused with Error, or a Crash (not a ConfigError).
+type YAMLConfigCase struct {
+	ID    string `json:"id"`
+	Input string `json:"input"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	Crash string `json:"crash,omitempty"`
+}
+
+// YAMLCases is every recorded yaml.safe_load of a text.
+func YAMLCases() ([]YAMLCase, error) { return load[YAMLCase]("yaml.jsonl") }
+
+// YAMLConfigCases is every recorded parse_config of a loaded text.
+func YAMLConfigCases() ([]YAMLConfigCase, error) { return load[YAMLConfigCase]("yaml_config.jsonl") }
+
 // RulesetCases is every recorded build_ruleset call.
 func RulesetCases() ([]RulesetCase, error) { return load[RulesetCase]("ruleset.jsonl") }

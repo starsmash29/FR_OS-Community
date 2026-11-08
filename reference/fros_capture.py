@@ -8,7 +8,12 @@ reference/PIN, over its own test suite:
 
 Every call of `parse_config` (the schema check) and `build_ruleset`
 (the nft script) made anywhere in the suite is written down: the raw
-input, and the result or the error. A test's own assertions don't
+input, and the result or the error. So is every `yaml.safe_load` of a
+text (yaml.jsonl: the text and the value PyYAML built, or its error),
+and every `parse_config` of a value that came straight from one
+(yaml_config.jsonl: the text and parse_config's answer), since a YAML
+value can be what JSON can't carry (a date, a key that isn't a
+string). A test's own assertions don't
 matter here; what the 1.x code returned for that input does. Calls whose
 input can't be written as JSON, or whose Config didn't come from a
 recorded parse_config (a test built it by hand), are counted, not
@@ -36,8 +41,52 @@ from pathlib import Path
 FIXED_NOW = 1793491200.0
 
 _raw_by_config: dict[int, object] = {}
-_cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}}
-_skipped = {"config_not_json": 0, "ruleset_unknown_config": 0, "ruleset_not_json": 0}
+#: id(value) -> (value, text) for each value yaml.safe_load built.
+_text_by_value: dict[int, tuple[object, str]] = {}
+_cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}, "yaml": {}, "yaml_config": {}}
+_skipped = {"config_not_json": 0, "ruleset_unknown_config": 0, "ruleset_not_json": 0, "yaml_not_text": 0}
+
+
+class _Recursive(Exception):
+    pass
+
+
+def _tagged(value, seen=()):
+    """`value` as JSON that keeps its Python type: an object is always a
+    tag ({"int": "5"}, {"map": [[key, value], ...]}, ...), never a plain
+    mapping, so nothing is ambiguous."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:  # a lone surrogate, from an escape
+            return {"surrogates": repr(value)}
+        return value
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return {"int": str(value)}
+    if isinstance(value, float):
+        return {"float": repr(value)}
+    if isinstance(value, datetime.datetime):
+        offset = value.utcoffset()
+        return {"datetime": [value.year, value.month, value.day, value.hour, value.minute, value.second,
+                             value.microsecond, None if offset is None else int(offset.total_seconds())]}
+    if isinstance(value, datetime.date):
+        return {"date": value.isoformat()}
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    if id(value) in seen:
+        raise _Recursive
+    seen = seen + (id(value),)
+    if isinstance(value, list):
+        return [_tagged(v, seen) for v in value]
+    if isinstance(value, tuple):
+        return {"tuple": [_tagged(v, seen) for v in value]}
+    if isinstance(value, (set, frozenset)):
+        return {"set": sorted((_tagged(v, seen) for v in value), key=repr)}
+    if isinstance(value, dict):
+        return {"map": [[_tagged(k, seen), _tagged(v, seen)] for k, v in value.items()]}
+    return {"other": type(value).__name__}
 
 
 def _key(case: dict) -> str:
@@ -67,6 +116,13 @@ def _plain(value):
     return value
 
 
+def _unchanged(value, loaded) -> bool:
+    try:
+        return _tagged(value) == _tagged(loaded)
+    except _Recursive:
+        return False
+
+
 def _record(kind: str, case: dict) -> None:
     _cases[kind].setdefault(_key(case), case)
 
@@ -79,17 +135,51 @@ def _patch():
     from frfw.nft import builder
     from frfw.nft.schedule import current_clock
 
+    import yaml
+
     original_parse = loader.parse_config
     original_build = builder.build_ruleset
+    original_safe_load = yaml.safe_load
+
+    def safe_load(stream):
+        if not isinstance(stream, str):
+            _skipped["yaml_not_text"] += 1
+            return original_safe_load(stream)
+        try:
+            value = original_safe_load(stream)
+        except yaml.YAMLError as exc:
+            _record("yaml", {"input": stream, "ok": False, "error": str(exc)})
+            raise
+        except Exception as exc:  # 1.x crashes: not a YAMLError
+            _record("yaml", {"input": stream, "ok": False, "crash": type(exc).__name__})
+            raise
+        try:
+            _record("yaml", {"input": stream, "ok": True, "value": _tagged(value)})
+        except _Recursive:
+            _record("yaml", {"input": stream, "ok": True, "recursive": True})
+        _text_by_value[id(value)] = (value, stream)
+        return value
 
     def parse_config(raw, *args, **kwargs):
         snapshot = copy.deepcopy(raw)
+        held = _text_by_value.get(id(raw))
+        text = held[1] if held is not None and held[0] is raw and not args and not kwargs else None
+        if text is not None and not _unchanged(snapshot, original_safe_load(text)):
+            text = None  # the test changed the value after loading it
         try:
             result = original_parse(raw, *args, **kwargs)
         except ConfigError as exc:
             if _jsonable(snapshot) and not args and not kwargs:
                 _record("config", {"input": snapshot, "ok": False, "error": str(exc)})
+            if text is not None:
+                _record("yaml_config", {"input": text, "ok": False, "error": str(exc)})
             raise
+        except Exception as exc:  # 1.x crashes: not a ConfigError
+            if text is not None:
+                _record("yaml_config", {"input": text, "ok": False, "crash": type(exc).__name__})
+            raise
+        if text is not None:
+            _record("yaml_config", {"input": text, "ok": True})
         if _jsonable(snapshot) and not args and not kwargs:
             _record("config", {"input": snapshot, "ok": True})
             _raw_by_config[id(result)] = (result, snapshot)
@@ -124,6 +214,7 @@ def _patch():
         return output
 
     loader.parse_config = config_pkg.parse_config = parse_config
+    yaml.safe_load = safe_load
     builder.build_ruleset = nft_pkg.build_ruleset = build_ruleset
 
 

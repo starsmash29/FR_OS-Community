@@ -37,14 +37,16 @@ changes the other in the same PR.
 FR_OS 2 must do what 1.x does unless a change is decided and written
 down. `reference/generate.sh` runs 1.x's own test suite, at the commit
 in `reference/PIN`, with a capture plugin (`reference/fros_capture.py`)
-that records every config check and every ruleset 1.x produced, into
-`testdata/reference/`. Next to 1.x's suite it runs
-`reference/test_fros_edge_cases.py`, which only feeds 1.x odd values
-(what Python's ipaddress, datetime and isinstance let through) so their
-answers are recorded too. The Go packages replay those cases:
+that records every config check, every YAML text loaded and every
+ruleset 1.x produced, into `testdata/reference/`. Next to 1.x's suite it
+runs `reference/test_fros_edge_cases.py` and
+`reference/test_fros_yaml_cases.py`, which only feed 1.x odd values
+(what Python's ipaddress, datetime and isinstance, and PyYAML's YAML 1.1,
+let through) so their answers are recorded too. The Go packages replay
+those cases:
 
-- the config package must accept and refuse the same configs, with the
-  same message;
+- the config package must load the same YAML to the same values, and
+  accept and refuse the same configs, with the same message;
 - the ruleset builder must produce the same nft script, byte for byte.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
@@ -120,9 +122,9 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 |---|---|
 | `cmd/` | Go binaries (one per service) |
 | `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
-| `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config` |
+| `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
 | `appid/` | The application catalog (app control's domain names) |
-| `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference |
+| `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |
