@@ -136,6 +136,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
 | `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
 | `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply; `cmd/fr-apply-helper` runs it |
+| `apply/` | Making the system match a config, as one transaction: the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.transaction` and `frfw.apply`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
