@@ -45,8 +45,11 @@ func CaptureLink(run Runner, device string) (LinkState, error) {
 	}
 	var links []ipLink
 	if err := json.Unmarshal([]byte(res.Stdout), &links); err != nil || len(links) != 1 {
-		if err == nil {
-			err = fmt.Errorf("%d devices listed", len(links))
+		if err == nil { // Python's text for `(link,) = ...`
+			err = errors.New("not enough values to unpack (expected 1, got 0)")
+			if len(links) > 1 {
+				err = fmt.Errorf("too many values to unpack (expected 1, got %d)", len(links))
+			}
 		}
 		return LinkState{}, fmt.Errorf("could not read the state of %s: %v", d, err)
 	}

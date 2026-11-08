@@ -1,6 +1,6 @@
 """The files FR_OS 1.x's apply writes, rendered from every config the run
 saw accepted, recorded for FR_OS 2's renderers (reference/generate.sh
-runs this module last, after the ruleset module, so it sees every
+runs this module after the ruleset module, so it sees every
 config the run accepted).
 
 For each accepted config it renders what apply_all writes or hands a

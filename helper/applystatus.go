@@ -61,37 +61,44 @@ func isFile(path string) bool {
 // its order; the one exception 1.x doesn't catch (an infinite float
 // where an int belongs) is no reply.
 func readPending(path string) (*pending, float64, error) {
+	p, deadline, _, err := readPendingFull(path)
+	return p, deadline, err
+}
+
+// readPendingFull is readPending with the record's previous config text
+// (str(data["previous"])), which a revert writes back.
+func readPendingFull(path string) (*pending, float64, string, error) {
 	text, err := os.ReadFile(path)
 	if err != nil || !utf8.Valid(text) {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	v, err := config.ParseJSONLastWins(text)
 	if err != nil {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	data, ok := v.(*config.Map)
 	if !ok {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	id, ok := data.Get("id")
 	if !ok {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	d, ok := data.Get("deadline")
 	if !ok {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	deadline, err := pyFloatOf(d)
 	if err != nil {
-		return nil, 0, nilUnlessNoReply(err)
+		return nil, 0, "", nilUnlessNoReply(err)
 	}
 	sec, ok := data.Get("seconds")
 	if !ok {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	seconds, err := pyInt(sec)
 	if err != nil {
-		return nil, 0, nilUnlessNoReply(err)
+		return nil, 0, "", nilUnlessNoReply(err)
 	}
 	by, _ := data.Get("by")
 	p := &pending{ID: config.Str(id), Seconds: seconds, Addresses: []string{}}
@@ -101,16 +108,17 @@ func readPending(path string) (*pending, float64, error) {
 	if a, _ := data.Get("addresses"); config.Truthy(a) {
 		items, err := pyIter(a)
 		if err != nil {
-			return nil, 0, nil
+			return nil, 0, "", nil
 		}
 		for _, item := range items {
 			p.Addresses = append(p.Addresses, config.Str(item))
 		}
 	}
-	if !data.Has("previous") {
-		return nil, 0, nil
+	previous, ok := data.Get("previous")
+	if !ok {
+		return nil, 0, "", nil
 	}
-	return p, deadline, nil
+	return p, deadline, config.Str(previous), nil
 }
 
 // nilUnlessNoReply: read() catches ValueError and TypeError (no record),

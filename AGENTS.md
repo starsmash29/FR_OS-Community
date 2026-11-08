@@ -47,18 +47,25 @@ let through) so their answers are recorded too;
 requests of every shape, from peers of every role, and records its
 replies; then `reference/test_fros_ruleset_cases.py`, which has 1.x
 build a ruleset from every config the run saw accepted, and from
-schedules, clocks and runtime members of every shape; and last
+schedules, clocks and runtime members of every shape;
 `reference/test_fros_render_cases.py`, which has 1.x render every file
 its apply writes (Kea, dnsmasq, dhcpcd, the RA instance, the kernel's
 IPv6 settings, WireGuard, sshd, the PQC fragments) from each accepted
-config. The Go packages replay those cases:
+config; and last `reference/test_fros_apply_cases.py`, which runs 1.x's
+applies, confirmations, reverts, rollbacks and saves through its
+apply-helper against a fake system (every path under a directory of its
+own, every program answered from a table, steps made to fail one by
+one) and records the programs run, the replies and the files left. The
+Go packages replay those cases:
 
 - the config package must load the same YAML to the same values, and
   accept and refuse the same configs, with the same message;
 - the ruleset builder must produce the same nft script, byte for byte;
 - the apply-helper must give the same reply to the same request, and run
   nft with the same arguments;
-- the renderers must write the same files, byte for byte.
+- the renderers must write the same files, byte for byte;
+- an apply must run the same programs, with the same input and timeout,
+  in the same order, answer the same, and leave the same files.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -135,8 +142,8 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
 | `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
 | `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
-| `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply; `cmd/fr-apply-helper` runs it |
-| `apply/` | Making the system match a config, as one transaction: the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.transaction` and `frfw.apply`) |
+| `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time |
+| `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.provision`, `frfw.transaction` and `frfw.apply`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
