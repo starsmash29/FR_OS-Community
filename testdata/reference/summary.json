@@ -1,0 +1,9 @@
+{
+  "config": 593,
+  "ruleset": 177,
+  "skipped": {
+    "config_not_json": 1,
+    "ruleset_not_json": 0,
+    "ruleset_unknown_config": 2
+  }
+}

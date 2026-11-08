@@ -1,0 +1,19 @@
+[package]
+name = "fros-ipc"
+description = "FR_OS wire format on Unix sockets: one JSON object per line (Rust side of ipc)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+hex = "0.4"
+
+[lints]
+workspace = true

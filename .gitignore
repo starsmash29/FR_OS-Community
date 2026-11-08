@@ -1,0 +1,6 @@
+/target/
+/bin/
+/reference-out/
+*.test
+*.out
+__pycache__/
