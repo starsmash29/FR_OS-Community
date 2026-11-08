@@ -115,3 +115,45 @@ message, refusals and command errors included, is 1.x's word for word.
 
 A command 1.x knows and 2.x doesn't run yet answers `command '<cmd>' is
 not in FR_OS 2 yet`; 1.x never sends that, and none is recorded.
+
+## 2026-11-08: applies (phase 2b-3)
+
+Proposed in FR_OS-Community's phase 2b-3 PR; to be decided with the
+owner's "Mehet". The apply sessions are apply.jsonl
+(reference/test_fros_apply_cases.py); apply/reference_apply_test.go
+replays them.
+
+- **The sensors' config copy** (`/etc/fr_os/sensor-config.yaml`, ROADMAP
+  SEC-11) is written as one line of flow-style YAML under the same
+  header, where 1.x writes PyYAML's block style (`safe_dump`). Cases:
+  every session that saves or applies; the replay compares the copy as
+  data (the parser daemons read the same values). Why: FR_OS 2 has a
+  YAML reader, not PyYAML's emitter; flow YAML with every string
+  double-quoted and escaped reads back the same in PyYAML and in
+  `config.LoadYAML` (config/flowyaml_test.go checks every value the
+  recording loaded), and porting the block emitter would be a second
+  YAML implementation to keep right.
+- **The XDP SNI filter** is not in FR_OS 2 yet (phase 4, Rust/aya): an
+  apply of a config with `xdp_sni_filter.enabled`, or while a filter is
+  attached, is refused at its preflight, before anything changes, where
+  1.x loads it. Cases: sessions whose config enables the filter (marked
+  `decided` when the recording has one). Why: an apply that said it had
+  loaded a filter it can't load would be a lie; refusing changes
+  nothing.
+- **The schedule record's fingerprint** (`schedule_state.json`,
+  `config_fingerprint`) is the SHA-256 of the parsed config as
+  deterministic JSON, where 1.x hashes Python's `repr` of it. Cases:
+  sessions applying a config with a scheduled rule; the replay compares
+  the record without that field. Why: `repr` of Python dataclasses can't
+  be reproduced in Go; the fingerprint only has to change when the
+  parsed config does. A router upgraded from 1.x re-applies once at its
+  next schedule check.
+- **Where 1.x let an exception through** (the peer got no reply), FR_OS 2
+  replies `{"ok": false, "message": ...}` with what went wrong. Cases:
+  steps recorded with `raised`. Why: a client waiting for an answer
+  should get one.
+- **The host's OpenSSL version** (PQC, hybrid TLS needs 3.5) comes from
+  `openssl version` (the library's, when it prints one), where 1.x reads
+  its own interpreter's `ssl.OPENSSL_VERSION_INFO`. The replay gives
+  both the same version. Why: Go links no OpenSSL; the webUI's libssl
+  is the host's, which `openssl version` reports.

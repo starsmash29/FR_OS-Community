@@ -19,7 +19,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
+
+	"github.com/starsmash29/fr_os-community/config"
 )
 
 // Cmd is one program run.
@@ -45,6 +48,29 @@ var (
 	ErrNotFound = errors.New("apply: program not found")
 	ErrTimeout  = errors.New("apply: program timed out")
 )
+
+// TimeoutError is a program killed at its timeout; its text is
+// Python's subprocess.TimeoutExpired's, which 1.x lets through to the
+// apply's error.
+type TimeoutError struct {
+	Argv    []string
+	Timeout time.Duration
+}
+
+func (e *TimeoutError) Error() string {
+	list := make([]config.Value, len(e.Argv))
+	for i, a := range e.Argv {
+		list[i] = a
+	}
+	secs := e.Timeout.Seconds()
+	text := strconv.FormatFloat(secs, 'f', -1, 64)
+	if secs != float64(int64(secs)) {
+		text = config.Repr(secs)
+	}
+	return fmt.Sprintf("Command '%s' timed out after %s seconds", config.Repr(list), text)
+}
+
+func (e *TimeoutError) Is(target error) bool { return target == ErrTimeout }
 
 // maxOutput bounds what is read from a program: far more than the
 // largest ruleset listing.
@@ -72,7 +98,7 @@ func Run(c Cmd) (Result, error) {
 		return Result{}, ErrNotFound
 	}
 	if ctx.Err() != nil {
-		return Result{}, ErrTimeout
+		return Result{}, &TimeoutError{c.Argv, c.Timeout}
 	}
 	if stdout.over || stderr.over {
 		return Result{}, fmt.Errorf("%s wrote more than %d bytes", c.Argv[0], maxOutput)

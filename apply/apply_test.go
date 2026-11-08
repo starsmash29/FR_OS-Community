@@ -405,3 +405,18 @@ func TestNoNft(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+func TestParseOpenSSLVersion(t *testing.T) {
+	for out, want := range map[string]string{
+		"OpenSSL 3.0.15 3 Sep 2024\n":                                     "OpenSSL 3.0.15 3 Sep 2024",
+		"OpenSSL 3.5.1 1 Jul 2025 (Library: OpenSSL 3.0.15 3 Sep 2024)\n": "OpenSSL 3.0.15 3 Sep 2024",
+	} {
+		v, text := parseOpenSSLVersion(out)
+		if text != want || v != [3]int{3, 0, 15} {
+			t.Errorf("%q: %v %q", out, v, text)
+		}
+	}
+	if v, text := parseOpenSSLVersion("LibreSSL x"); v != [3]int{} || text != "LibreSSL x" {
+		t.Errorf("LibreSSL: %v %q", v, text)
+	}
+}

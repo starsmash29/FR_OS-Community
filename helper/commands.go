@@ -37,6 +37,18 @@ func (s *Server) dispatch(cmd config.Value, request *config.Map) (any, error) {
 		return s.iotIsolationStatus()
 	case "dhcp_leases":
 		return s.dhcpLeases()
+	case "apply":
+		return s.cmdApply(request)
+	case "apply_confirm":
+		return s.cmdApplyConfirm(request)
+	case "apply_revert":
+		return s.cmdApplyRevert()
+	case "restore_rejected":
+		return s.cmdRestoreRejected()
+	case "rollback":
+		return s.cmdRollback()
+	case "save_config":
+		return s.cmdSaveConfig(request)
 	}
 	if slices.Contains(Commands, name) {
 		return message(false, fmt.Sprintf("command %s is not in FR_OS 2 yet", config.Repr(cmd))), nil

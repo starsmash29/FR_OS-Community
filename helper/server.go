@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/starsmash29/fr_os-community/apply"
 	"github.com/starsmash29/fr_os-community/config"
 	"github.com/starsmash29/fr_os-community/ipc"
 )
@@ -34,6 +35,11 @@ const (
 type Env struct {
 	ConfigPath, BackupDir, KeaConfigPath, ZtnaStatePath, AdblockHostsPath string
 	KeaLeasesPath, ApplyPendingPath, RejectedConfigPath                   string
+	// ApplyLockPath is the lock apply, confirm and revert share ("" is
+	// Sys's).
+	ApplyLockPath string
+	// Sys is the system the mutating commands change (nil: the router's).
+	Sys *apply.System
 
 	Nft NftRunner
 	// Now is the time as Python's time.time() gives it.

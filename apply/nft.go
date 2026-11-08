@@ -60,8 +60,11 @@ func CaptureRuleset(run Runner) (string, error) {
 	return res.Stdout, err
 }
 
+// geteuid is os.Geteuid; the replay of 1.x's applies answers 0.
+var geteuid = os.Geteuid
+
 func requireRoot() error {
-	if os.Geteuid() != 0 {
+	if geteuid() != 0 {
 		return &NftError{"This operation requires root privileges (got syntax-checked OK, but not loaded). " +
 			"Re-run as root, or use --dry-run."}
 	}

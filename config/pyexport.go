@@ -156,3 +156,35 @@ func PyFloat(s string) (float64, bool) {
 	}
 	return f, true
 }
+
+// PySplit is str.split(): runs of whitespace separate, none at the ends.
+func PySplit(s string) []string { return strings.FieldsFunc(s, pyIsSpace) }
+
+// PySplitlines is str.splitlines(): every line boundary Python knows
+// (\n, \r, \r\n, \v, \f, \x1c-\x1e, \x85,  ,  ), the
+// boundaries dropped, no empty last line.
+func PySplitlines(s string) []string {
+	var lines []string
+	rs := []rune(s)
+	var cur []rune
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch r {
+		case '\n', '\v', '\f', '\x1c', '\x1d', '\x1e', '\u0085', ' ', ' ':
+			lines = append(lines, string(cur))
+			cur = cur[:0]
+		case '\r':
+			lines = append(lines, string(cur))
+			cur = cur[:0]
+			if i+1 < len(rs) && rs[i+1] == '\n' {
+				i++
+			}
+		default:
+			cur = append(cur, r)
+		}
+	}
+	if len(cur) > 0 {
+		lines = append(lines, string(cur))
+	}
+	return lines
+}

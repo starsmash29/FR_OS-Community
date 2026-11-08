@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/starsmash29/fr_os-community/apply"
 	"github.com/starsmash29/fr_os-community/config"
 	"github.com/starsmash29/fr_os-community/nft"
 )
@@ -24,10 +25,25 @@ func testServer(t *testing.T, policy Policy) (*Server, string) {
 	env := Env{
 		ApplyPendingPath: filepath.Join(dir, "apply-pending.json"), RejectedConfigPath: filepath.Join(dir, "rejected"),
 		KeaLeasesPath: filepath.Join(dir, "leases.csv"), Nft: RunNft,
+		ConfigPath: filepath.Join(dir, "config.yaml"), Sys: inertSystem(dir),
 		Now: func() float64 { return float64(time.Now().UnixNano()) / 1e9 },
 	}
 	return &Server{Env: env, Policy: func() Policy { return policy }, ReadTimeout: 5 * time.Second, MaxConns: 4},
 		filepath.Join(dir, "run", "apply.sock")
+}
+
+// inertSystem is a system under dir that runs no program: a test never
+// touches the machine's own files or units.
+func inertSystem(dir string) *apply.System {
+	sys := apply.DefaultSystem()
+	sys.Paths = apply.DefaultPaths().Under(dir)
+	sys.Run = func(apply.Cmd) (apply.Result, error) { return apply.Result{}, apply.ErrNotFound }
+	sys.Which = func(string) string { return "" }
+	sys.LoginUsers = func() []string { return nil }
+	sys.OpenSSLVersion = func() ([3]int, string) { return [3]int{3, 0, 0}, "OpenSSL 3.0.0" }
+	sys.Sleep = func(time.Duration) {}
+	sys.Chown = func(string, int, int) error { return nil }
+	return sys
 }
 
 func serve(t *testing.T, s *Server, path string) {
@@ -88,7 +104,8 @@ func TestSocketRoles(t *testing.T) {
 		request, want string
 	}{
 		{Full, `{"cmd": "ping"}` + "\n", `{"ok":true,"message":"pong"}` + "\n"},
-		{Full, `{"cmd": "apply"}` + "\n", `{"ok":false,"message":"command 'apply' is not in FR_OS 2 yet"}` + "\n"},
+		{Full, `{"cmd": "set_management_addresses"}` + "\n",
+			`{"ok":false,"message":"command 'set_management_addresses' is not in FR_OS 2 yet"}` + "\n"},
 		{Full, `{"cmd": "status"}` + "\n", `{"ok":false,"message":"unknown command 'status'"}` + "\n"},
 		{Sensor, `{"cmd": "ping"}` + "\n", `{"ok":true,"message":"pong"}` + "\n"},
 		{Sensor, `{"cmd": "save_config", "yaml": ""}` + "\n",

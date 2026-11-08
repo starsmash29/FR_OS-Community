@@ -103,6 +103,7 @@ func replay(t *testing.T, c reference.HelperCase) (any, [][]string, error) {
 	calls := [][]string{}
 	env := Env{
 		ConfigPath:         filepath.Join(dir, "config.yaml"),
+		Sys:                inertSystem(dir),
 		ApplyPendingPath:   write("apply-pending.json", c.Files.ApplyPending),
 		RejectedConfigPath: rejected,
 		KeaLeasesPath:      write("kea-leases4.csv", c.Files.KeaLeases),

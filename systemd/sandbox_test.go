@@ -37,6 +37,7 @@ var everywhere = map[string][]string{
 // runs as its own unprivileged account.
 var root = map[string]string{
 	"fr-apply-helper.service": "the privilege boundary: applies the network config",
+	"fr-apply-revert.service": "a revert is an apply: the apply-helper's own sandbox",
 }
 
 // never is no service's to have.
@@ -45,7 +46,7 @@ var never = []string{"CAP_SYS_MODULE", "CAP_SYS_PTRACE", "CAP_SYS_BOOT", "CAP_SY
 	"CAP_SYS_TTY_CONFIG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND"}
 
 // exposure is the `systemd-analyze security` budget (0 best, 10 worst).
-var exposure = map[string]float64{"fr-apply-helper.service": 4.5}
+var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-revert.service": 4.5}
 
 // service is a unit's [Service]: each key and every value it is given.
 func service(t *testing.T, name string) map[string][]string {

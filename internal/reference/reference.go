@@ -9,6 +9,10 @@
 //     frfw.nft.build_ruleset produced.
 //   - helper.jsonl: a request line to the apply-helper, the peer's role,
 //     what nft answered and the files the command read, and the reply.
+//   - render.jsonl: the files an apply writes, rendered from a config.
+//   - apply.jsonl: a session of applies, confirmations, reverts,
+//     rollbacks and saves against a fake system: the programs run, the
+//     replies, and the files before and after.
 //
 // The Go packages replay these in their tests.
 package reference
@@ -168,3 +172,70 @@ type RenderCase struct {
 
 // RenderCases are render.jsonl's cases.
 func RenderCases() ([]RenderCase, error) { return load[RenderCase]("render.jsonl") }
+
+// ApplyFile is one file of an apply case's tree: its mode, and its text
+// (Hex when it isn't UTF-8, SHA256 and Len when it is large). A nil
+// entry under a name ending in "/" is an empty directory.
+type ApplyFile struct {
+	Mode   string  `json:"mode"`
+	Text   *string `json:"text,omitempty"`
+	Hex    string  `json:"hex,omitempty"`
+	SHA256 string  `json:"sha256,omitempty"`
+	Len    int     `json:"len,omitempty"`
+}
+
+// ApplyAnswer is what a program says: the first entry whose Argv is a
+// prefix of the call's (After lets that many such calls through to the
+// entries below). Error is "missing" (not installed) or "timeout".
+type ApplyAnswer struct {
+	Argv   []string `json:"argv"`
+	After  int      `json:"after,omitempty"`
+	RC     int      `json:"rc,omitempty"`
+	Stdout string   `json:"stdout,omitempty"`
+	Stderr string   `json:"stderr,omitempty"`
+	Error  string   `json:"error,omitempty"`
+}
+
+// ApplyCall is one program 1.x ran: its argv, its input (a string, or
+// {"sha256", "len"} when long, or null) and its timeout in seconds.
+type ApplyCall struct {
+	Argv    []string       `json:"argv"`
+	Input   jsontext.Value `json:"input"`
+	Timeout jsontext.Value `json:"timeout"`
+}
+
+// ApplyStep is one request of an apply session: 1.x's reply, or the
+// type and text of the exception it let through (no reply), and the
+// programs it ran.
+type ApplyStep struct {
+	Request jsontext.Value `json:"request"`
+	Reply   jsontext.Value `json:"reply,omitempty"`
+	Raised  string         `json:"raised,omitempty"`
+	Error   string         `json:"error,omitempty"`
+	Calls   []ApplyCall    `json:"calls"`
+}
+
+// ApplyCase is one session with 1.x's apply-helper against a fake system
+// (reference/test_fros_apply_cases.py). Paths are under "@ROOT@", the
+// temporary directory is "@TMP@" (a temporary file's name "@TMP@/tmp*").
+// Table answers the programs, OpenSSL is the host's ([major, minor,
+// patch, text], as Python's ssl module says), Random is the randomness it drew (hex),
+// Setup and Files are the tree before and after; Leaks are paths 1.x
+// touched outside the root.
+type ApplyCase struct {
+	ID      string                `json:"id"`
+	Setup   map[string]*ApplyFile `json:"setup"`
+	Table   []ApplyAnswer         `json:"table"`
+	Random  string                `json:"random"`
+	Now     float64               `json:"now"`
+	OpenSSL jsontext.Value        `json:"openssl"`
+	// LoginUsers are who can log in with SSH (frfw.management.ssh_login_users).
+	LoginUsers []string              `json:"login_users"`
+	Steps      []ApplyStep           `json:"steps"`
+	Files      map[string]*ApplyFile `json:"files"`
+	Leaks      []string              `json:"leaks"`
+	Decided    string                `json:"decided,omitempty"`
+}
+
+// ApplyCases is every recorded apply session.
+func ApplyCases() ([]ApplyCase, error) { return load[ApplyCase]("apply.jsonl") }
