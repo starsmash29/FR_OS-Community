@@ -62,6 +62,21 @@ refuses the text with its own message; the recorded case says only that
 1.x crashed. The same holds for parse_config's crashes on YAML values,
 such as sorting unknown keys of different types.
 
+## 2026-11-08: a port given as `true` is refused
+
+Proposed in FR_OS-Community PR #4 (phase 1c); awaiting the owner's
+"Mehet".
+
+- Cases: configs whose rule `dst_port`, or port forward `dst_port` or
+  `to_port`, is `true`. 1.x accepts them (in Python `True` is the
+  integer 1) and keeps the value as it is, so the nft script says
+  `tcp dport True` and `dnat ip to 10.0.0.5:True`, which nft refuses at
+  apply time; 2.x refuses the config instead. `false` was already
+  refused by both (port 0 is out of range).
+- Why: the config check is the one place a value is validated before it
+  reaches the nft script (security-lessons F1); a config that can't be
+  applied should not be accepted.
+
 ## 2026-11-08: messages
 
 Not a difference today: every refused case is refused with 1.x's own

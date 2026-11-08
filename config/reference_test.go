@@ -1,8 +1,6 @@
 package config
 
 import (
-	"math/big"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +27,7 @@ func TestReference(t *testing.T) {
 			t.Fatalf("%s: %v", c.ID, err)
 		}
 		_, err = Parse(raw)
-		if name := decided(raw); name != "" && c.OK {
+		if name := Decided(raw); name != "" && c.OK {
 			// A decided difference: 1.x accepted it, 2.x refuses it.
 			if err == nil {
 				t.Errorf("%s: decision %q: accepted here", c.ID, name)
@@ -51,46 +49,4 @@ func TestReference(t *testing.T) {
 		}
 	}
 	t.Logf("%d cases: %d accepted and %d refused as 1.x did, %d differ by decision", len(cases), accepted, refused, diffs)
-}
-
-// decided names the decision a case falls under (testdata/reference/
-// decisions.md), or "".
-func decided(raw Value) string {
-	top, _ := raw.(*Map)
-	if top == nil {
-		return ""
-	}
-	section := func(name string) *Map { m, _ := top.get(name, nil).(*Map); return m }
-	if m := section("xdp_sni_filter"); m != nil && endsInNewline(m.get("blocklist", nil)) {
-		return "trailing newline"
-	}
-	if m := section("adblocker"); m != nil && endsInNewline(m.get("allowlist", nil)) {
-		return "trailing newline"
-	}
-	if m := section("adblocker"); m != nil && beyond64(m.get("xdp_critical_limit", nil)) {
-		return "64-bit integers"
-	}
-	if m := section("dhcp"); m != nil {
-		for _, v := range m.Values() {
-			if pool, _ := v.(*Map); pool != nil && beyond64(pool.get("lease_time", nil)) {
-				return "64-bit integers"
-			}
-		}
-	}
-	return ""
-}
-
-func endsInNewline(v Value) bool {
-	list, _ := v.([]Value)
-	for _, e := range list {
-		if s, ok := e.(string); ok && strings.HasSuffix(s, "\n") {
-			return true
-		}
-	}
-	return false
-}
-
-func beyond64(v Value) bool {
-	n, ok := v.(*big.Int)
-	return ok && n.Sign() > 0 && !n.IsInt64()
 }

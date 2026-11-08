@@ -42,7 +42,10 @@ ruleset 1.x produced, into `testdata/reference/`. Next to 1.x's suite it
 runs `reference/test_fros_edge_cases.py` and
 `reference/test_fros_yaml_cases.py`, which only feed 1.x odd values
 (what Python's ipaddress, datetime and isinstance, and PyYAML's YAML 1.1,
-let through) so their answers are recorded too. The Go packages replay
+let through) so their answers are recorded too, and last
+`reference/test_fros_ruleset_cases.py`, which has 1.x build a ruleset
+from every config the run saw accepted, and from schedules, clocks and
+runtime members of every shape. The Go packages replay
 those cases:
 
 - the config package must load the same YAML to the same values, and
@@ -123,6 +126,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `cmd/` | Go binaries (one per service) |
 | `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
 | `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
+| `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |

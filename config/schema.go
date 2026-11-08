@@ -1,5 +1,10 @@
 package config
 
+import (
+	"fmt"
+	"strconv"
+)
+
 // The checked config: frfw.config.schema in 1.x, field for field. Values
 // are normalized the way 1.x stores them (addresses in their canonical
 // form, MACs in lower case), because the ruleset builder prints them as
@@ -309,4 +314,46 @@ type Config struct {
 	Wireguard      WireguardConfig
 	Logging        LoggingConfig
 	Timezone       string // "" for the router's own
+}
+
+// SrcNetworks are the networks of family version (4 or 6) in
+// SrcAddress, in its order: Rule.networks("src_address", version).
+func (r *Rule) SrcNetworks(version int) []string { return networksOf(r.SrcAddress, r.srcNets, version) }
+
+// DstNetworks are DstAddress's, as SrcNetworks.
+func (r *Rule) DstNetworks(version int) []string { return networksOf(r.DstAddress, r.dstNets, version) }
+
+func networksOf(texts []string, nets []ipNet, version int) []string {
+	var out []string
+	for i, n := range nets {
+		if n.version == version {
+			out = append(out, texts[i])
+		}
+	}
+	return out
+}
+
+// IsSuffix: Host is an interface identifier (the upper 64 bits zero),
+// matched in whatever prefix the zone has now.
+func (p *Ipv6Pinhole) IsSuffix() bool {
+	a, err := parseIPv6Address(p.Host)
+	return err == nil && a.ip.hi == 0
+}
+
+// Port is "443", or "1000-1010" for a range.
+func (p *Ipv6Pinhole) Port() string {
+	if p.PortFrom == p.PortTo {
+		return strconv.Itoa(p.PortFrom)
+	}
+	return fmt.Sprintf("%d-%d", p.PortFrom, p.PortTo)
+}
+
+// ManagementZones are the zones the webUI and SSH are reachable from
+// (frfw.management.management_zones).
+func (c *Config) ManagementZones() map[string]bool { return managedZones(c) }
+
+// IPv6LanExclusions: zone -> why it can't have IPv6 (ROADMAP FND-1b,
+// frfw.config.loader.ipv6_lan_exclusions).
+func (c *Config) IPv6LanExclusions() map[string]string {
+	return ipv6LanExclusions(&c.Zones, &c.Nat, c.Rules)
 }
