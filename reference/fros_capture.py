@@ -15,18 +15,25 @@ recorded parse_config (a test built it by hand), are counted, not
 recorded.
 
 Defaults that depend on the moment (`now`, the schedule clock) are
-fixed before the call and recorded, so each case replays exactly.
+fixed before the call and recorded, so each case replays exactly; `now`
+is a fixed date, so a rerun records the same rulesets. (A config a test
+builds from the current time, such as an expiry an hour from now, still
+changes from run to run.)
 """
 
 from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime
 import hashlib
 import json
+import math
 import os
-import time
 from pathlib import Path
+
+#: 2026-11-01T00:00:00Z: `now` for calls that leave it to the clock.
+FIXED_NOW = 1793491200.0
 
 _raw_by_config: dict[int, object] = {}
 _cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}}
@@ -38,11 +45,26 @@ def _key(case: dict) -> str:
 
 
 def _jsonable(value) -> bool:
-    try:
-        json.dumps(value, allow_nan=False)
+    """`value` is exactly what JSON can carry, so the replay sees the same
+    input: json.dumps would also take tuples, non-string keys (an int key
+    becomes "1") and NaN, and hand back something else."""
+    if value is None or isinstance(value, (bool, int, str)):
         return True
-    except (TypeError, ValueError):
-        return False
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if type(value) is list:
+        return all(_jsonable(v) for v in value)
+    if type(value) is dict:
+        return all(type(k) is str and _jsonable(v) for k, v in value.items())
+    return False
+
+
+def _plain(value):
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    return value
 
 
 def _record(kind: str, case: dict) -> None:
@@ -77,9 +99,11 @@ def _patch():
 
     def build_ruleset(config, *, clock=None, now=None, runtime=None):
         if now is None:
-            now = time.time()
+            # A fixed moment, not the clock: the same call records the
+            # same case on every run.
+            now = FIXED_NOW
         if clock is None and any(r.schedule is not None for r in config.rules):
-            clock = current_clock(config.timezone)
+            clock = current_clock(config.timezone, datetime.datetime.fromtimestamp(now, datetime.UTC))
         output = original_build(config, clock=clock, now=now, runtime=runtime)
         held = _raw_by_config.get(id(config))
         if held is None or held[0] is not config:
@@ -88,8 +112,9 @@ def _patch():
         case = {
             "input": held[1],
             "now": now,
-            "clock": dataclasses.asdict(clock) if clock is not None else None,
-            "runtime": dataclasses.asdict(runtime) if runtime is not None else None,
+            # Built here, not by a test: tuples in them are just lists.
+            "clock": _plain(dataclasses.asdict(clock)) if clock is not None else None,
+            "runtime": _plain(dataclasses.asdict(runtime)) if runtime is not None else None,
             "output": output,
         }
         if _jsonable(case):
@@ -112,6 +137,9 @@ def pytest_unconfigure(config):
     for kind, cases in _cases.items():
         with open(out / f"{kind}.jsonl", "w", encoding="utf-8") as f:
             for key in sorted(cases):
-                f.write(json.dumps({"id": key, **cases[key]}, sort_keys=True, ensure_ascii=False) + "\n")
+                # Keys keep the order the config had: 1.x walks mappings
+                # in that order (zones, interfaces...), so it shows in the
+                # first error reported and in the ruleset's order.
+                f.write(json.dumps({"id": key, **cases[key]}, ensure_ascii=False) + "\n")
     summary = {kind: len(cases) for kind, cases in _cases.items()} | {"skipped": _skipped}
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")

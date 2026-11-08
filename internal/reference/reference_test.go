@@ -48,8 +48,9 @@ func TestTheReferenceIsComplete(t *testing.T) {
 			t.Errorf("ruleset case %s does not start with flush ruleset", c.ID)
 		}
 	}
-	// Far fewer would mean the capture broke, not that 1.x shrank.
-	if accepted < 100 || refused < 100 || len(rulesets) < 100 {
+	// Far fewer would mean the capture broke, not that 1.x shrank. (The
+	// rulesets are unique cases at one fixed moment, about 80 today.)
+	if accepted < 100 || refused < 100 || len(rulesets) < 60 {
 		t.Fatalf("only %d accepted, %d refused configs and %d rulesets", accepted, refused, len(rulesets))
 	}
 	t.Logf("%d accepted, %d refused configs, %d rulesets", accepted, refused, len(rulesets))
