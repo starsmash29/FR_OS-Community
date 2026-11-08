@@ -7,8 +7,10 @@
 //   - ruleset.jsonl: an accepted config, the moment and schedule clock it
 //     was rendered at, the runtime set members, and the nft script
 //     frfw.nft.build_ruleset produced.
+//   - helper.jsonl: a request line to the apply-helper, the peer's role,
+//     what nft answered and the files the command read, and the reply.
 //
-// The Go config and nft packages replay these in their tests.
+// The Go packages replay these in their tests.
 package reference
 
 import (
@@ -106,3 +108,41 @@ func YAMLConfigCases() ([]YAMLConfigCase, error) { return load[YAMLConfigCase]("
 
 // RulesetCases is every recorded build_ruleset call.
 func RulesetCases() ([]RulesetCase, error) { return load[RulesetCase]("ruleset.jsonl") }
+
+// NftAnswer is what the recording's nft gave for one set.
+type NftAnswer struct {
+	RC     int    `json:"rc"`
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+}
+
+// HelperFiles are the files a helper case's command read, hex-encoded
+// ("" or absent: no file).
+type HelperFiles struct {
+	ApplyPending *string `json:"apply_pending,omitempty"`
+	Rejected     bool    `json:"rejected,omitempty"`
+	KeaLeases    *string `json:"kea_leases,omitempty"`
+}
+
+// HelperCase is one request to 1.x's apply-helper
+// (reference/test_fros_helper_cases.py). Line is the request (LineHex
+// its bytes in hex when they aren't UTF-8); Role is "full", "sensor" or "none" for a peer with Uid; Nft maps a
+// set's name to nft's answer (a set not named isn't loaded; nil: no nft
+// at all); Reply is null when 1.x sent none. Decided names the
+// decisions.md entry of a case 2.x answers differently on purpose.
+type HelperCase struct {
+	ID       string               `json:"id"`
+	Line     *string              `json:"line,omitempty"`
+	LineHex  string               `json:"line_hex,omitempty"`
+	Role     string               `json:"role"`
+	UID      int                  `json:"uid"`
+	Nft      map[string]NftAnswer `json:"nft"`
+	Files    HelperFiles          `json:"files"`
+	Now      float64              `json:"now"`
+	Reply    jsontext.Value       `json:"reply"`
+	NftCalls [][]string           `json:"nft_calls"`
+	Decided  string               `json:"decided,omitempty"`
+}
+
+// HelperCases is every recorded helper request.
+func HelperCases() ([]HelperCase, error) { return load[HelperCase]("helper.jsonl") }

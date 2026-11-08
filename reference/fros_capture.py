@@ -13,7 +13,9 @@ text (yaml.jsonl: the text and the value PyYAML built, or its error),
 and every `parse_config` of a value that came straight from one
 (yaml_config.jsonl: the text and parse_config's answer), since a YAML
 value can be what JSON can't carry (a date, a key that isn't a
-string). A test's own assertions don't
+string). helper.jsonl holds the apply-helper requests
+reference/test_fros_helper_cases.py sends (it records them itself,
+through `_record`). A test's own assertions don't
 matter here; what the 1.x code returned for that input does. Calls whose
 input can't be written as JSON, or whose Config didn't come from a
 recorded parse_config (a test built it by hand), are counted, not
@@ -43,7 +45,7 @@ FIXED_NOW = 1793491200.0
 _raw_by_config: dict[int, object] = {}
 #: id(value) -> (value, text) for each value yaml.safe_load built.
 _text_by_value: dict[int, tuple[object, str]] = {}
-_cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}, "yaml": {}, "yaml_config": {}}
+_cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}, "yaml": {}, "yaml_config": {}, "helper": {}}
 _skipped = {"config_not_json": 0, "ruleset_unknown_config": 0, "ruleset_not_json": 0, "yaml_not_text": 0}
 
 

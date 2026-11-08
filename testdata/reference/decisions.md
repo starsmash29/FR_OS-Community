@@ -82,3 +82,36 @@ Proposed in FR_OS-Community PR #4 (phase 1c); decided with the owner's
 Not a difference today: every refused case is refused with 1.x's own
 message, word for word, and the config test checks that. A later change
 of wording is recorded here.
+
+## 2026-11-08: the helper's requests
+
+Proposed in FR_OS-Community PR #6 (phase 2a); awaiting the owner's
+"Mehet".
+
+The apply-helper reads a request as every FR_OS 2 line is read (package
+`ipc`, AGENTS.md "one wire format"). 1.x read it with `readline` and
+`json.loads`, which let more through. The cases are marked `decided` in
+helper.jsonl (reference/test_fros_helper_cases.py); 2.x answers each
+with `invalid request: ...` where 1.x answered the command:
+
+- **No newline at the end.** 1.x parsed what came before the end of the
+  stream; every 1.x client ends its line with one.
+- **Longer than 64 KiB.** 1.x read the first 65536 bytes and parsed
+  them, so a longer line whose first 64 KiB happened to be a whole
+  object (here: trailing spaces) was taken. 2.x refuses the line.
+- **A name twice** (`{"cmd": "apply", "cmd": "ping"}`). 1.x took the last
+  one; a peer must not have one side read one command and the other side
+  another.
+- **NaN and Infinity**, which JSON doesn't have.
+- **A lone surrogate** (`"\ud800"`), which isn't text.
+- **A byte order mark** before the object. 1.x's `json.loads` of bytes
+  skips one.
+
+Where 1.x's message quotes Python's own JSON or codec error ("Expecting
+value: line 1 column 1 (char 0)", "'utf-8' codec can't decode ..."), and
+in "could not parse nft JSON output: ...", 2.x says what is wrong in its
+own words after the same prefix; the test checks the prefix. Every other
+message, refusals and command errors included, is 1.x's word for word.
+
+A command 1.x knows and 2.x doesn't run yet answers `command '<cmd>' is
+not in FR_OS 2 yet`; 1.x never sends that, and none is recorded.
