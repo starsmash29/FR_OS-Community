@@ -17,7 +17,8 @@ recorded.
 Defaults that depend on the moment (`now`, the schedule clock) are
 fixed before the call and recorded, so each case replays exactly; `now`
 is a fixed date, so a rerun records the same rulesets. (A config a test
-builds from the current time, such as an expiry an hour from now, still
+builds from the current time or at random, such as an expiry an hour
+from now or a fresh token, still
 changes from run to run.)
 """
 
