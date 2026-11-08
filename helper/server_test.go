@@ -42,6 +42,7 @@ func inertSystem(dir string) *apply.System {
 	sys.LoginUsers = func() []string { return nil }
 	sys.OpenSSLVersion = func() ([3]int, string) { return [3]int{3, 0, 0}, "OpenSSL 3.0.0" }
 	sys.Sleep = func(time.Duration) {}
+	sys.Chown = func(string, int, int) error { return nil }
 	return sys
 }
 

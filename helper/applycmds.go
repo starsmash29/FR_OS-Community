@@ -220,7 +220,7 @@ func (s *Server) Revert(why string) ([]string, error) {
 		messages = result
 	}
 	if unconfirmed, err := os.ReadFile(p.Config); err == nil && string(unconfirmed) != held.previous {
-		if err := writeLike(p.RejectedConfig, string(unconfirmed), p.Config); err != nil {
+		if err := writeLike(sys, p.RejectedConfig, string(unconfirmed), p.Config); err != nil {
 			return nil, err
 		}
 	}
@@ -255,7 +255,7 @@ func parsePrevious(text string) (*config.Config, error) {
 
 // writeLike writes path with like's owner and mode: it holds what
 // config.yaml holds.
-func writeLike(path, text, like string) error {
+func writeLike(sys *apply.System, path, text, like string) error {
 	if err := apply.WriteKeepingOwner(path, text); err != nil {
 		return err
 	}
@@ -263,9 +263,9 @@ func writeLike(path, text, like string) error {
 	if err != nil {
 		return nil
 	}
-	if os.Geteuid() == 0 {
-		sys := st.Sys().(*syscall.Stat_t)
-		if err := os.Chown(path, int(sys.Uid), int(sys.Gid)); err != nil {
+	if sys.Euid() == 0 {
+		owner := st.Sys().(*syscall.Stat_t)
+		if err := sys.Chown(path, int(owner.Uid), int(owner.Gid)); err != nil {
 			return err
 		}
 	}

@@ -122,6 +122,9 @@ type System struct {
 	ConfirmPoll time.Duration
 	// Sleep waits (the revert wait).
 	Sleep func(time.Duration)
+	// Chown is os.Chown, for the files a root apply hands to an account
+	// (the sensors' copy, the audit log).
+	Chown func(path string, uid, gid int) error
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;
@@ -137,6 +140,7 @@ func DefaultSystem() *System {
 		OpenSSLVersion: hostOpenSSL,
 		ConfirmPoll:    defaultConfirmWait,
 		Sleep:          time.Sleep,
+		Chown:          os.Chown,
 	}
 }
 

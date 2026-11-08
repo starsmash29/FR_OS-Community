@@ -144,6 +144,7 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	version := [3]int{int(openssl[0].(float64)), int(openssl[1].(float64)), int(openssl[2].(float64))}
 	sys.OpenSSLVersion = func() ([3]int, string) { return version, openssl[3].(string) }
 	sys.Sleep = func(time.Duration) {}
+	sys.Chown = func(string, int, int) error { return nil } // as the recording's: no accounts
 	p := sys.Paths
 	s := &helper.Server{Env: helper.Env{
 		ConfigPath: p.Config, BackupDir: p.BackupDir, KeaConfigPath: p.KeaConfig,

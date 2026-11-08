@@ -108,7 +108,7 @@ func (s *System) WriteSensorCopy(raw config.Value) error {
 		if !ok {
 			gid = 0 // no sensor account (a dev box): root's alone
 		}
-		err = os.Chown(tmp, 0, gid)
+		err = s.Chown(tmp, 0, gid)
 	}
 	if err == nil {
 		err = os.Chmod(tmp, 0o640)
@@ -162,8 +162,8 @@ func (s *System) Alert(message, user, client string) {
 		f.Close()
 		if s.root() {
 			if gid, ok := groupOf(WebUIUser); ok {
-				os.Chown(filepath.Dir(path), 0, gid)
-				os.Chown(path, 0, gid)
+				s.Chown(filepath.Dir(path), 0, gid)
+				s.Chown(path, 0, gid)
 			}
 		}
 	}
