@@ -42,15 +42,19 @@ ruleset 1.x produced, into `testdata/reference/`. Next to 1.x's suite it
 runs `reference/test_fros_edge_cases.py` and
 `reference/test_fros_yaml_cases.py`, which only feed 1.x odd values
 (what Python's ipaddress, datetime and isinstance, and PyYAML's YAML 1.1,
-let through) so their answers are recorded too, and last
-`reference/test_fros_ruleset_cases.py`, which has 1.x build a ruleset
-from every config the run saw accepted, and from schedules, clocks and
-runtime members of every shape. The Go packages replay
-those cases:
+let through) so their answers are recorded too;
+`reference/test_fros_helper_cases.py`, which sends 1.x's apply-helper
+requests of every shape, from peers of every role, and records its
+replies; and last `reference/test_fros_ruleset_cases.py`, which has 1.x
+build a ruleset from every config the run saw accepted, and from
+schedules, clocks and runtime members of every shape. The Go packages
+replay those cases:
 
 - the config package must load the same YAML to the same values, and
   accept and refuse the same configs, with the same message;
-- the ruleset builder must produce the same nft script, byte for byte.
+- the ruleset builder must produce the same nft script, byte for byte;
+- the apply-helper must give the same reply to the same request, and run
+  nft with the same arguments.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -127,9 +131,11 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
 | `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
 | `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
+| `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply; `cmd/fr-apply-helper` runs it |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |
+| `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |
 | `docs/security-lessons.md` | The security requirements every feature meets (IDs like `I1`, `G3`), carried over from 1.x |

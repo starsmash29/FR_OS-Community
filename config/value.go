@@ -136,8 +136,17 @@ func keyOf(v Value) (string, bool) {
 // ParseJSON reads a raw config from JSON, keeping key order. Numbers
 // written without a fraction or exponent are integers, as Python's json
 // module reads them.
-func ParseJSON(data []byte) (Value, error) {
-	dec := jsontext.NewDecoder(bytes.NewReader(data))
+func ParseJSON(data []byte) (Value, error) { return parseJSON(data) }
+
+// ParseJSONLastWins is ParseJSON that also takes a name given twice in
+// an object, keeping its last value, as Python's json.loads does: for
+// files 1.x writes and reads with it, never for what crosses a socket.
+func ParseJSONLastWins(data []byte) (Value, error) {
+	return parseJSON(data, jsontext.AllowDuplicateNames(true))
+}
+
+func parseJSON(data []byte, opts ...jsontext.Options) (Value, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(data), opts...)
 	v, err := decodeValue(dec)
 	if err != nil {
 		return nil, err
@@ -171,8 +180,9 @@ func decodeValue(dec *jsontext.Decoder) (Value, error) {
 			}
 			return n, nil
 		}
+		// 1e400 is inf to Python's json, not an error.
 		f, err := strconv.ParseFloat(text, 64)
-		if err != nil {
+		if err != nil && !isRangeErr(err) {
 			return nil, fmt.Errorf("config: bad number %q", text)
 		}
 		return f, nil

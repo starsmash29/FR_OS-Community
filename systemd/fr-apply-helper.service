@@ -1,0 +1,39 @@
+[Unit]
+Description=FR_OS privileged apply-helper (root-run; webUI talks to it over fr-apply-helper.socket)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+Requires=fr-apply-helper.socket
+After=fr-apply-helper.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/fr_os/fr-apply-helper
+Restart=on-failure
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root, because this is what changes the network: nft, ip, Kea's and
+# sshd's config, XDP pins. Everything else is shut: only the paths an
+# apply writes, no kernel modules/logs/clock, no namespaces, a reduced
+# capability set. /sys stays writable for the XDP pins on bpffs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/etc/fr_os -/etc/kea -/etc/ssh/sshd_config.d -/usr/local/share/fr_os -/sys/fs/bpf -/var/log/fr_os
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=~@clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_IPC_LOCK CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_KILL
+
+[Install]
+Also=fr-apply-helper.socket
