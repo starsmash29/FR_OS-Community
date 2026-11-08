@@ -1,6 +1,7 @@
 """Extra inputs for FR_OS 1.x's build_ruleset, run with the capture
 plugin after 1.x's own suite and the edge-case modules
-(reference/generate.sh lists this module last).
+(reference/generate.sh lists it after them, and only the render module
+after it).
 
 1.x's tests build rulesets from a few dozen configs. FR_OS 2 must give
 the same script for every config 1.x accepts, so this module builds one

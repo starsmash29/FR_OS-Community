@@ -146,3 +146,25 @@ type HelperCase struct {
 
 // HelperCases is every recorded helper request.
 func HelperCases() ([]HelperCase, error) { return load[HelperCase]("helper.jsonl") }
+
+// RenderCase is one config's rendered files (reference/
+// test_fros_render_cases.py), or one PQC fragment.
+type RenderCase struct {
+	ID string `json:"id"`
+	// Config is the id of the config's case in config.jsonl; "" for a
+	// PQC fragment.
+	Config string `json:"config"`
+	// ULAState is the generated ULA prefix the router's state file held,
+	// nil for none. With one, Output holds only what it changed.
+	ULAState *string `json:"ula_state"`
+	// Pqc ("tls" or "ssh") and Hybrid say which PQC fragment it is.
+	Pqc    string `json:"pqc"`
+	Hybrid bool   `json:"hybrid"`
+	// Output is each renderer's text (sysctl: [key, value] pairs);
+	// Error the type of what a renderer raised instead.
+	Output map[string]jsontext.Value `json:"output"`
+	Error  map[string]string         `json:"error"`
+}
+
+// RenderCases are render.jsonl's cases.
+func RenderCases() ([]RenderCase, error) { return load[RenderCase]("render.jsonl") }

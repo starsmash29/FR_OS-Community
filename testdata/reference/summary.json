@@ -1,6 +1,7 @@
 {
-  "config": 1635,
+  "config": 1707,
   "helper": 483,
+  "render": 1634,
   "ruleset": 2145,
   "skipped": {
     "config_not_json": 13,

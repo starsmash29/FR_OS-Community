@@ -750,7 +750,7 @@ func parseDhcp(raw Value, zones *Ordered[Zone], interfaces *Ordered[Interface]) 
 		}
 		dhcp.Zones.set(zone, DhcpPool{
 			Zone: zone, RangeStart: v4String(start), RangeEnd: v4String(end), DNSServers: dns,
-			LeaseTime:    intOf(lease).Int64(),
+			LeaseTime: intOf(lease).Int64(), LeaseTimeTrue: lease == true,
 			Reservations: parseDhcpReservations(body.get("reservations", []Value{}), network, gateway, what),
 		})
 	}
