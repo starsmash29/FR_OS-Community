@@ -1,0 +1,155 @@
+{
+ "comment": "Wire-format test vectors for ipc (Go) and crates/fros-ipc (Rust): both must give `want` for every case. hex = the bytes on the socket; max = the line limit in bytes.",
+ "vectors": [
+  {
+   "name": "object",
+   "hex": "7b22636d64223a22737461747573227d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "object with spaces and CR",
+   "hex": "207b22636d64223a2022737461747573227d200d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "nested object",
+   "hex": "7b22636d64223a226170706c79222c2261726773223a7b2261223a5b312c322c7b2262223a6e756c6c7d5d7d7d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "unicode escape",
+   "hex": "7b226e616d65223a225c753030653172765c75303065647a227d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "raw UTF-8",
+   "hex": "7b226e616d65223a22c3817276c3ad7a74c5b172c59120c581c3b364c5ba227d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "exactly max",
+   "hex": "7b226b223a227878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "one past max",
+   "hex": "7b226b223a22787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878227d0a",
+   "max": 64,
+   "want": "too_long"
+  },
+  {
+   "name": "long without newline",
+   "hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+   "max": 64,
+   "want": "too_long"
+  },
+  {
+   "name": "empty stream",
+   "hex": "",
+   "max": 64,
+   "want": "eof"
+  },
+  {
+   "name": "no newline at end",
+   "hex": "7b22636d64223a22737461747573227d",
+   "max": 64,
+   "want": "truncated"
+  },
+  {
+   "name": "duplicate name",
+   "hex": "7b22636d64223a22737461747573222c22636d64223a226170706c79227d0a",
+   "max": 64,
+   "want": "duplicate_key"
+  },
+  {
+   "name": "nested duplicate name",
+   "hex": "7b2261726773223a7b2261223a312c2261223a327d7d0a",
+   "max": 64,
+   "want": "duplicate_key"
+  },
+  {
+   "name": "same name in sibling objects",
+   "hex": "7b2261223a7b2278223a317d2c2262223a7b2278223a327d7d0a",
+   "max": 64,
+   "want": "ok"
+  },
+  {
+   "name": "array",
+   "hex": "5b312c325d0a",
+   "max": 64,
+   "want": "not_object"
+  },
+  {
+   "name": "string",
+   "hex": "22636d64220a",
+   "max": 64,
+   "want": "not_object"
+  },
+  {
+   "name": "null",
+   "hex": "6e756c6c0a",
+   "max": 64,
+   "want": "not_object"
+  },
+  {
+   "name": "empty line",
+   "hex": "0a",
+   "max": 64,
+   "want": "invalid_json"
+  },
+  {
+   "name": "trailing garbage",
+   "hex": "7b2261223a317d20780a",
+   "max": 64,
+   "want": "invalid_json"
+  },
+  {
+   "name": "two objects",
+   "hex": "7b2261223a317d7b2262223a327d0a",
+   "max": 64,
+   "want": "invalid_json"
+  },
+  {
+   "name": "trailing comma",
+   "hex": "7b2261223a312c7d0a",
+   "max": 64,
+   "want": "invalid_json"
+  },
+  {
+   "name": "single quotes",
+   "hex": "7b2761273a317d0a",
+   "max": 64,
+   "want": "invalid_json"
+  },
+  {
+   "name": "invalid UTF-8",
+   "hex": "7b2261223a22ff227d0a",
+   "max": 64,
+   "want": "invalid_utf8"
+  },
+  {
+   "name": "overlong UTF-8",
+   "hex": "7b2261223a22c0af227d0a",
+   "max": 64,
+   "want": "invalid_utf8"
+  },
+  {
+   "name": "lone surrogate escape",
+   "hex": "7b2261223a225c7564383030227d0a",
+   "max": 64,
+   "want": "invalid_json"
+  },
+  {
+   "name": "NUL in string",
+   "hex": "7b2261223a2200227d0a",
+   "max": 64,
+   "want": "invalid_json"
+  }
+ ]
+}

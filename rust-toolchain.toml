@@ -1,0 +1,7 @@
+# The userland crates build on this pinned stable toolchain. The eBPF
+# crates (crates/*-ebpf) build with nightly + bpf-linker, as aya
+# requires; see AGENTS.md, "Toolchains".
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

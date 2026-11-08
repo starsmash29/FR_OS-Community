@@ -1,0 +1,124 @@
+# Contributing to FR_OS 2 — for people and AI agents
+
+FR_OS is a Debian-based firewall/router OS. FR_OS 2 is its rewrite in
+**Go** and **Rust**, replacing the Python FR_OS 1.x
+([FR_OS-pblk](https://github.com/starsmash29/FR_OS-pblk)). This file
+says how the code is split, the rules every change follows, and what
+"done" means. They apply to every contributor: a person, a coding agent,
+or an AI tool working on someone's behalf.
+
+> **This repository is private while FR_OS 2 is being built.** External
+> contributions are not taken yet; the integrating agent (Claude Code)
+> implements the phases below with the owner's go-ahead.
+
+## Which language does what
+
+| Part | Language | Why |
+|---|---|---|
+| Config schema, loading, validation | Go | `encoding/json/v2` and YAML; many rules, fast iteration |
+| nftables ruleset builder | Go | netlink (`google/nftables`); its output is compared byte for byte with 1.x |
+| apply-helper (root) | Go | small and auditable; Unix socket + per-peer-uid command list |
+| webUI | Go, `net/http` + `html/template` | server-rendered, no JavaScript framework, nothing from a CDN (G11) |
+| Ad-block DNS | Go | |
+| Parser daemons (TLS fingerprints, app ID, AI IDS, IoT) | Rust | they read traffic strangers send: memory safety and speed |
+| XDP / eBPF programs and their loaders | Rust, [aya](https://aya-rs.dev) | one language from kernel to userland |
+
+Go and Rust never link into one binary (no cgo, no FFI). Each runs as
+its own process, under its own account, and they talk over Unix sockets
+in one wire format: **one JSON object per line**, the format 1.x already
+uses (`ipc`, `crates/fros-ipc`, vectors in
+`testdata/ipc/vectors.json`). A line is refused unless it is UTF-8,
+valid JSON, an object, at most the line limit, and has no name twice in
+any object. Both sides run the same vectors; a change to one side
+changes the other in the same PR.
+
+## Differential tests: 1.x is the specification
+
+FR_OS 2 must do what 1.x does unless a change is decided and written
+down. `reference/generate.sh` runs 1.x's own test suite, at the commit
+in `reference/PIN`, with a capture plugin (`reference/fros_capture.py`)
+that records every config check and every ruleset 1.x produced, into
+`testdata/reference/`. The Go packages replay those cases:
+
+- the config package must accept and refuse the same configs;
+- the ruleset builder must produce the same nft script, byte for byte.
+
+A difference is a bug in 2.x or a decision. A decision gets a line in
+the PR and an entry in `testdata/reference/decisions.md` saying which
+cases change and why. Never edit a recorded case by hand: change PIN and
+regenerate.
+
+## Ground rules (not negotiable)
+
+**Licence**
+- FR_OS is under the GNU AGPLv3 ([LICENSE](LICENSE)), with no additional permissions or exceptions.
+- Every contribution is accepted under the [Contributor License Agreement](CLA.md).
+- Third-party code keeps its licence and must be compatible with the AGPLv3; name it in the PR. eBPF programs declare a GPL-compatible licence, as the kernel requires.
+- The Community Edition does not take compliance auditing features (automated compliance reporting, audit-trail exports, regulatory log management). The FR_OS name is a trademark ([LEGAL.md](LEGAL.md), section 3).
+
+**Language and style**
+- Everything committed is in **English**: code, comments, docs, commit messages and UI text.
+- Go: `gofmt`, `go vet`, no `cgo` (`CGO_ENABLED=0`). JSON goes through `encoding/json/v2` only, never `encoding/json` v1.
+- Rust: `cargo fmt`, `cargo clippy` with warnings denied. Userland crates `forbid(unsafe_code)` (set in the workspace); only the eBPF crates may use `unsafe`, and each block says why.
+- Comments say *why*, with security-lessons or review IDs where they apply, as 1.x does.
+
+**Secrets and trust**
+- Never commit a secret: private keys, tokens, passwords, API keys, real config files.
+- Never ask for, generate or handle the release signing key.
+- FR_OS stays 100% local: no telemetry, no cloud calls, no vendor login (security-lessons G11). Anything that talks to the internet is opt-in and documented in the PR.
+
+**Privilege boundaries** (security-lessons A1, I1)
+- The webUI and the parser daemons never run privileged code. Root work goes through the apply-helper; each command is allowed per peer uid.
+- Every service gets its own unprivileged account and a full systemd sandbox.
+- A service listens only where it is needed and is off unless configured (I1, K7).
+
+**Untrusted input**
+- Every value that reaches an argv, an nft script or a config file is validated in one place (the config package), with `--` before positional values (F1).
+- Anchor every regex at both ends. In Go and Rust `^`/`$` match only at the ends of the text unless multi-line mode is on; never turn it on for validation.
+- Every read from a socket, file or the network has a size limit.
+
+**Dependencies**
+- `go.sum` and `Cargo.lock` are committed; the toolchains are pinned (`go.mod`'s `toolchain` line, `rust-toolchain.toml`).
+- A new dependency is named in the PR with why it is needed. Prefer the standard library.
+- CI runs `govulncheck` and `cargo audit`; a known vulnerability blocks the merge.
+- Never install anything unpinned on the router.
+
+**Tests and history**
+- Never weaken, skip, delete or quarantine a test to get green. A failing test is a finding.
+- No force-push to shared branches, and no rewriting of others' history.
+
+## Toolchains
+
+- Go 1.27 (`go.mod`). `encoding/json/v2` is in the standard library from 1.27 without an experiment flag.
+- Rust stable 1.97 for userland (`rust-toolchain.toml`).
+- The aya eBPF crates build with nightly Rust and `bpf-linker`; how CI installs `bpf-linker` (pinned) is decided with the first eBPF crate.
+
+## Definition of done
+
+A PR is ready for review when all of the following hold.
+
+- **Tests.** Every change comes with tests. Prefer the real thing over mocks: real `nft`, real network namespaces, real sockets; root-only tests skip themselves without root.
+  ```bash
+  go vet ./... && go test ./...
+  cargo fmt --all --check && cargo clippy --all-targets && cargo test
+  ```
+- **Differential tests** pass, or every difference is a recorded decision.
+- **Boot test**, when the change touches the image, boot, services, networking or the installer: the installer workflow with `boot_test=true` passes. If you can't run it, say so in the PR.
+- **PR description**: what changed and why; how it was tested, with commands and results; what is *not* done or not verified.
+
+## Review and merge
+
+Every PR is reviewed by the maintainer's integrating agent (Claude Code), which checks it against this file, runs the checks above, and merges only after the owner's "Mehet" (go). A PR that falls behind `main` gets `main` merged into it, not rebased.
+
+## Repository map
+
+| Path | What |
+|---|---|
+| `cmd/` | Go binaries (one per service) |
+| `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
+| `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference |
+| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |
+| `reference/` | The pinned 1.x commit and the capture plugin |
+| `testdata/` | Shared test vectors and the recorded 1.x reference |
+| `docs/security-lessons.md` | The security requirements every feature meets (IDs like `I1`, `G3`), carried over from 1.x |
+| `.github/workflows/` | CI |
