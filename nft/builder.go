@@ -417,8 +417,8 @@ func (b *builder) ipv6InputChain() []string {
 	}
 	var dns []string
 	for _, zd := range b.lanDevices() {
-		if served[zd.zone] {
-			dns = append(dns, zd.device)
+		if served[zd.Zone] {
+			dns = append(dns, zd.Device)
 		}
 	}
 	if len(dns) > 0 {
@@ -449,8 +449,8 @@ func (b *builder) ipv6ManagementDevices() []string {
 	zones := b.c.ManagementZones()
 	var out []string
 	for _, zd := range b.lanDevices() {
-		if zones[zd.zone] {
-			out = append(out, zd.device)
+		if zones[zd.Zone] {
+			out = append(out, zd.Device)
 		}
 	}
 	return out
@@ -589,7 +589,7 @@ const iidMask = "::ffff:ffff:ffff:ffff"
 func (b *builder) ipv6Pinholes() []string {
 	served := map[string]bool{}
 	for _, zd := range b.lanDevices() {
-		served[zd.zone] = true
+		served[zd.Zone] = true
 	}
 	if len(served) == 0 || len(b.c.IPv6.Pinholes) == 0 {
 		return nil
@@ -1008,14 +1008,8 @@ func (b *builder) ruleLines(r *config.Rule, family int, ztnaMatch string) []stri
 	return lines
 }
 
-// dnsResolverZones are the zones the ad-block resolver serves
-// (adblocker.serve_lan): the DHCP zones.
-func (b *builder) dnsResolverZones() []string {
-	if !(b.c.Adblocker.Enabled && b.c.Adblocker.ServeLan) {
-		return nil
-	}
-	return slices.Sorted(slices.Values(b.c.Dhcp.Zones.Keys))
-}
+// dnsResolverZones: config.DNSResolverZones.
+func (b *builder) dnsResolverZones() []string { return b.c.DNSResolverZones() }
 
 func (b *builder) natChains(forceDNSZones []string) {
 	b.add("\tchain prerouting {", "\t\ttype nat hook prerouting priority dstnat; policy accept;")
@@ -1026,7 +1020,7 @@ func (b *builder) natChains(forceDNSZones []string) {
 		b.add("")
 		ipv6Zones := map[string]bool{}
 		for _, zd := range b.lanDevices() {
-			ipv6Zones[zd.zone] = true
+			ipv6Zones[zd.Zone] = true
 		}
 		for _, z := range forceDNSZones {
 			families := []string{"ipv4"}
@@ -1063,56 +1057,22 @@ func (b *builder) natChains(forceDNSZones []string) {
 	b.add("\t}")
 }
 
-type zoneDevice struct{ zone, device string }
+// wanDevices: config.WanDevices.
+func (b *builder) wanDevices() []string { return b.c.WanDevices() }
 
-// wanDevices are the internet-facing interfaces' devices, where IPv6
-// comes from (frfw.ipv6.wan_devices).
-func (b *builder) wanDevices() []string {
-	facing := b.c.InternetFacingZones()
-	var out []string
-	for _, i := range b.c.Interfaces.Values() {
-		if facing[i.Zone] && !slices.Contains(out, i.Device) {
-			out = append(out, i.Device)
-		}
-	}
-	return out
-}
-
-// lanDevices are (zone, device) for every device the delegated prefix is
-// handed to (frfw.ipv6.lan_devices, FND-1b): zone by zone in lan-zone
-// order, then in config order. Not the VPN tunnel. Empty while IPv6 is
-// off.
-func (b *builder) lanDevices() []zoneDevice {
-	var out []zoneDevice
-	for _, z := range b.c.IPv6LanZones() {
-		for _, i := range b.c.Interfaces.Values() {
-			if i.Zone == z && !slices.ContainsFunc(out, func(zd zoneDevice) bool { return zd.device == i.Device }) {
-				out = append(out, zoneDevice{z, i.Device})
-			}
-		}
-	}
-	return out
-}
+// lanDevices: config.LanDevices.
+func (b *builder) lanDevices() []config.ZoneDevice { return b.c.LanDevices() }
 
 func (b *builder) ipv6LanDevices() []string {
 	var out []string
 	for _, zd := range b.lanDevices() {
-		out = append(out, zd.device)
+		out = append(out, zd.Device)
 	}
 	return out
 }
 
-// tunnelServed: the router routes IPv6 for the VPN's clients (FND-1d):
-// WireGuard and IPv6 on, and the tunnel's zone not kept off IPv6 by an
-// IPv4-only protection.
-func (b *builder) tunnelServed() bool {
-	wg := b.c.Wireguard
-	if !(wg.Enabled && b.c.IPv6.Enabled) {
-		return false
-	}
-	_, excluded := b.c.IPv6LanExclusions()[wg.Zone]
-	return !excluded
-}
+// tunnelServed: config.TunnelServed.
+func (b *builder) tunnelServed() bool { return b.c.TunnelServed() }
 
 // blockedZones are the zones whose management traffic the input chain
 // drops (frfw.management.blocked_zones).

@@ -45,16 +45,20 @@ runs `reference/test_fros_edge_cases.py` and
 let through) so their answers are recorded too;
 `reference/test_fros_helper_cases.py`, which sends 1.x's apply-helper
 requests of every shape, from peers of every role, and records its
-replies; and last `reference/test_fros_ruleset_cases.py`, which has 1.x
+replies; then `reference/test_fros_ruleset_cases.py`, which has 1.x
 build a ruleset from every config the run saw accepted, and from
-schedules, clocks and runtime members of every shape. The Go packages
-replay those cases:
+schedules, clocks and runtime members of every shape; and last
+`reference/test_fros_render_cases.py`, which has 1.x render every file
+its apply writes (Kea, dnsmasq, dhcpcd, the RA instance, the kernel's
+IPv6 settings, WireGuard, sshd, the PQC fragments) from each accepted
+config. The Go packages replay those cases:
 
 - the config package must load the same YAML to the same values, and
   accept and refuse the same configs, with the same message;
 - the ruleset builder must produce the same nft script, byte for byte;
 - the apply-helper must give the same reply to the same request, and run
-  nft with the same arguments.
+  nft with the same arguments;
+- the renderers must write the same files, byte for byte.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -132,6 +136,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
 | `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
 | `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply; `cmd/fr-apply-helper` runs it |
+| `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |

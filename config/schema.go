@@ -170,7 +170,10 @@ type DhcpPool struct {
 	RangeStart, RangeEnd string
 	DNSServers           []string
 	LeaseTime            int64
-	Reservations         []DhcpReservation
+	// LeaseTimeTrue: the config wrote lease_time: true, which 1.x takes
+	// as an integer (1) and keeps as the bool, so Kea's config says true.
+	LeaseTimeTrue bool
+	Reservations  []DhcpReservation
 }
 
 type DhcpConfig struct{ Zones Ordered[DhcpPool] }
