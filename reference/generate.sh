@@ -5,7 +5,8 @@
 # plugin, and writes testdata/reference/. Run it from the repository root;
 # commit the result together with any change of PIN. Run it as an
 # ordinary user, not root: root-only 1.x tests would add cases, and the
-# recorded set should not depend on who generated it.
+# recorded set should not depend on who generated it. TZ=UTC: an expiry
+# with no zone is read in the machine's, so the recording says which.
 #
 #   reference/generate.sh [path-to-a-FR_OS-1.x-clone]
 set -eu
@@ -26,8 +27,9 @@ git -C "$src" diff --quiet HEAD -- || { echo "the 1.x checkout has local changes
 out="$work/out"
 (
 	cd "$src"
-	FROS_CAPTURE_DIR="$out" PYTHONPATH="src:$root/reference" \
-		python3 -m pytest -p fros_capture tests --ignore=tests/webui -q -p no:cacheprovider >"$work/pytest.log" 2>&1 || true
+	TZ=UTC FROS_CAPTURE_DIR="$out" PYTHONPATH="src:$root/reference" \
+		python3 -m pytest -p fros_capture tests "$root/reference/test_fros_edge_cases.py" \
+			--ignore=tests/webui -q -p no:cacheprovider >"$work/pytest.log" 2>&1 || true
 )
 [ -s "$out/summary.json" ] || { tail -20 "$work/pytest.log" >&2; exit 1; }
 mkdir -p testdata/reference
