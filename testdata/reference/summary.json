@@ -1,9 +1,12 @@
 {
-  "config": 1453,
+  "config": 1483,
   "ruleset": 78,
   "skipped": {
-    "config_not_json": 1,
+    "config_not_json": 13,
     "ruleset_not_json": 0,
-    "ruleset_unknown_config": 2
-  }
+    "ruleset_unknown_config": 2,
+    "yaml_not_text": 0
+  },
+  "yaml": 1493,
+  "yaml_config": 252
 }

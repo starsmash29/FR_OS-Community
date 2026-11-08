@@ -53,5 +53,25 @@ func TestTheReferenceIsComplete(t *testing.T) {
 	if accepted < 100 || refused < 100 || len(rulesets) < 60 {
 		t.Fatalf("only %d accepted, %d refused configs and %d rulesets", accepted, refused, len(rulesets))
 	}
-	t.Logf("%d accepted, %d refused configs, %d rulesets", accepted, refused, len(rulesets))
+	yamls, err := YAMLCases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	yamlConfigs, err := YAMLConfigCases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range yamls {
+		if !c.OK && (c.Error == "") == (c.Crash == "") {
+			t.Errorf("yaml case %s refused without exactly one of an error and a crash", c.ID)
+		}
+		if c.OK && (len(c.Value) == 0) == !c.Recursive {
+			t.Errorf("yaml case %s loaded without exactly one of a value and recursive", c.ID)
+		}
+	}
+	if len(yamls) < 1000 || len(yamlConfigs) < 100 {
+		t.Fatalf("only %d YAML texts and %d configs from YAML", len(yamls), len(yamlConfigs))
+	}
+	t.Logf("%d accepted, %d refused configs, %d rulesets, %d YAML texts, %d configs from YAML",
+		accepted, refused, len(rulesets), len(yamls), len(yamlConfigs))
 }

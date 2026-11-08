@@ -122,6 +122,8 @@ func keyOf(v Value) (string, bool) {
 		return "s" + x, true
 	case Date:
 		return fmt.Sprintf("d%d-%d-%d", x.Year, x.Month, x.Day), true
+	case *unsupported:
+		return fmt.Sprintf("u%p", x), x.hashable
 	case Datetime:
 		if x.Aware {
 			return fmt.Sprintf("T%d", x.utcMicros()), true

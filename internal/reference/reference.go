@@ -98,8 +98,10 @@ type YAMLConfigCase struct {
 	Crash string `json:"crash,omitempty"`
 }
 
+// YAMLCases is every recorded yaml.safe_load of a text.
 func YAMLCases() ([]YAMLCase, error) { return load[YAMLCase]("yaml.jsonl") }
 
+// YAMLConfigCases is every recorded parse_config of a loaded text.
 func YAMLConfigCases() ([]YAMLConfigCase, error) { return load[YAMLConfigCase]("yaml_config.jsonl") }
 
 // RulesetCases is every recorded build_ruleset call.

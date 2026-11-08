@@ -82,7 +82,119 @@ func LoadYAML(text string) (v Value, err error) {
 			fill()
 		}
 	}
-	return unbox(data, map[*seqBox][]Value{}, map[*Map]bool{}), nil
+	out := unbox(data, map[*seqBox][]Value{}, map[*Map]bool{})
+	if tag := findUnsupported(out); tag != "" {
+		// decisions.md: no config value is bytes, a set or pairs.
+		crash("the YAML tag !!%s is not supported", strings.TrimPrefix(tag, yamlTag))
+	}
+	return out, nil
+}
+
+// unsupported stands for what PyYAML builds for !!binary (bytes, which
+// Python can hash), !!set (a set), !!omap and !!pairs (lists of pairs):
+// they are built and checked as PyYAML does, so its errors come out the
+// same, and a text that still holds one is refused at the end.
+type unsupported struct {
+	tag      string
+	hashable bool
+}
+
+func findUnsupported(v Value) string {
+	switch x := v.(type) {
+	case *unsupported:
+		return x.tag
+	case []Value:
+		for _, e := range x {
+			if t := findUnsupported(e); t != "" {
+				return t
+			}
+		}
+	case *Map:
+		for i := range x.keys {
+			if t := findUnsupported(x.keys[i]); t != "" {
+				return t
+			}
+			if t := findUnsupported(x.vals[i]); t != "" {
+				return t
+			}
+		}
+	}
+	return ""
+}
+
+// pairs is construct_yaml_omap and construct_yaml_pairs, after the
+// empty list is handed out.
+func (c *constructor) pairs(n *pyyaml.Node) {
+	context := "while constructing an ordered map"
+	if n.Tag == yamlTag+"pairs" {
+		context = "while constructing pairs"
+	}
+	if n.Kind != pyyaml.SequenceNode {
+		constructorError(context, n.Start, n, "expected a sequence, but found %s", n.Kind.ID())
+	}
+	for _, sub := range n.Items {
+		if sub.Kind != pyyaml.MappingNode {
+			constructorError(context, n.Start, sub, "expected a mapping of length 1, but found %s", sub.Kind.ID())
+		}
+		if len(sub.Pairs) != 1 {
+			constructorError(context, n.Start, sub, "expected a single mapping item, but found %d items", len(sub.Pairs))
+		}
+		c.object(sub.Pairs[0][0])
+		c.object(sub.Pairs[0][1])
+	}
+}
+
+// binary is construct_yaml_binary: base64.decodebytes, which skips
+// characters outside the alphabet.
+func (c *constructor) binary(n *pyyaml.Node) Value {
+	text := c.scalar(n)
+	runes := []rune(text)
+	for i, r := range runes {
+		if r < 0x80 {
+			continue
+		}
+		end := i
+		for end+1 < len(runes) && runes[end+1] >= 0x80 {
+			end++
+		}
+		what := fmt.Sprintf("character '%s' in position %d", pyEscape(r), i)
+		if end > i {
+			what = fmt.Sprintf("characters in position %d-%d", i, end)
+		}
+		constructorError("", pyyaml.Mark{}, n,
+			"failed to convert base64 data into ascii: 'ascii' codec can't encode %s: ordinal not in range(128)", what)
+	}
+	quad, pads, decoded := 0, 0, 0
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch == '=' {
+			if quad >= 2 {
+				pads++
+				if quad+pads >= 4 {
+					quad = 0
+					break
+				}
+			}
+			continue
+		}
+		if !(ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '+' || ch == '/') {
+			continue
+		}
+		pads = 0
+		if quad > 0 {
+			decoded++
+		}
+		quad = (quad + 1) % 4
+	}
+	switch {
+	case quad == 1:
+		constructorError("", pyyaml.Mark{}, n,
+			"failed to decode base64 data: Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4",
+			decoded/3*4+1)
+	case quad != 0:
+		constructorError("", pyyaml.Mark{}, n, "failed to decode base64 data: Incorrect padding")
+	}
+	return &unsupported{tag: n.Tag, hashable: true}
 }
 
 // The constructor (yaml.constructor.SafeConstructor). Python builds a
@@ -143,9 +255,16 @@ func (c *constructor) object(n *pyyaml.Node) Value {
 		m := NewMap()
 		v = m
 		c.pending = append(c.pending, func() { c.mapping(n, m) })
-	case yamlTag + "binary", yamlTag + "omap", yamlTag + "pairs", yamlTag + "set":
-		// decisions.md: no config value is bytes, a set or pairs.
-		crash("the YAML tag %s is not supported", pyStr("!!"+strings.TrimPrefix(n.Tag, yamlTag)))
+	case yamlTag + "binary":
+		v = c.binary(n)
+	case yamlTag + "omap", yamlTag + "pairs":
+		u := &unsupported{tag: n.Tag}
+		v = u
+		c.pending = append(c.pending, func() { c.pairs(n) })
+	case yamlTag + "set":
+		u := &unsupported{tag: n.Tag}
+		v = u
+		c.pending = append(c.pending, func() { c.mapping(n, NewMap()) })
 	default:
 		constructorError("", pyyaml.Mark{}, n, "could not determine a constructor for the tag %s", strRepr(n.Tag))
 	}
@@ -498,4 +617,15 @@ func daysIn(year, month int) int {
 		return 30
 	}
 	return 31
+}
+
+// pyEscape is how a UnicodeEncodeError names a character.
+func pyEscape(r rune) string {
+	switch {
+	case r <= 0xff:
+		return fmt.Sprintf(`\x%02x`, r)
+	case r <= 0xffff:
+		return fmt.Sprintf(`\u%04x`, r)
+	}
+	return fmt.Sprintf(`\U%08x`, r)
 }

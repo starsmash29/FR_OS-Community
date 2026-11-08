@@ -116,6 +116,13 @@ def _plain(value):
     return value
 
 
+def _unchanged(value, loaded) -> bool:
+    try:
+        return _tagged(value) == _tagged(loaded)
+    except _Recursive:
+        return False
+
+
 def _record(kind: str, case: dict) -> None:
     _cases[kind].setdefault(_key(case), case)
 
@@ -157,6 +164,8 @@ def _patch():
         snapshot = copy.deepcopy(raw)
         held = _text_by_value.get(id(raw))
         text = held[1] if held is not None and held[0] is raw and not args and not kwargs else None
+        if text is not None and not _unchanged(snapshot, original_safe_load(text)):
+            text = None  # the test changed the value after loading it
         try:
             result = original_parse(raw, *args, **kwargs)
         except ConfigError as exc:
