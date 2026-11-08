@@ -144,8 +144,9 @@ func (c *constructor) pairs(n *pyyaml.Node) {
 	}
 }
 
-// binary is construct_yaml_binary: base64.decodebytes, which skips
-// characters outside the alphabet.
+// binary is construct_yaml_binary: base64.decodebytes (Python 3.13's
+// binascii.a2b_base64, not strict), which skips characters outside the
+// alphabet and reads on after the padding.
 func (c *constructor) binary(n *pyyaml.Node) Value {
 	text := c.scalar(n)
 	runes := []rune(text)
@@ -170,10 +171,6 @@ func (c *constructor) binary(n *pyyaml.Node) Value {
 		if ch == '=' {
 			if quad >= 2 {
 				pads++
-				if quad+pads >= 4 {
-					quad = 0
-					break
-				}
 			}
 			continue
 		}
@@ -191,7 +188,7 @@ func (c *constructor) binary(n *pyyaml.Node) Value {
 		constructorError("", pyyaml.Mark{}, n,
 			"failed to decode base64 data: Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4",
 			decoded/3*4+1)
-	case quad != 0:
+	case quad != 0 && quad+pads < 4:
 		constructorError("", pyyaml.Mark{}, n, "failed to decode base64 data: Incorrect padding")
 	}
 	return &unsupported{tag: n.Tag, hashable: true}
