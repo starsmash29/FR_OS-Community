@@ -29,7 +29,7 @@ out="$work/out"
 	cd "$src"
 	TZ=UTC FROS_CAPTURE_DIR="$out" PYTHONPATH="src:$root/reference" \
 		python3 -m pytest -p fros_capture tests "$root/reference/test_fros_edge_cases.py" \
-			"$root/reference/test_fros_yaml_cases.py" \
+			"$root/reference/test_fros_yaml_cases.py" "$root/reference/test_fros_ruleset_cases.py" \
 			--ignore=tests/webui -q -p no:cacheprovider >"$work/pytest.log" 2>&1 || true
 )
 [ -s "$out/summary.json" ] || { tail -20 "$work/pytest.log" >&2; exit 1; }
