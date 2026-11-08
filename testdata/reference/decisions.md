@@ -85,7 +85,7 @@ of wording is recorded here.
 
 ## 2026-11-08: the helper's requests
 
-Proposed in FR_OS-Community PR #6 (phase 2a); awaiting the owner's
+Proposed in FR_OS-Community PR #6 (phase 2a); decided with the owner's
 "Mehet".
 
 The apply-helper reads a request as every FR_OS 2 line is read (package
