@@ -71,8 +71,8 @@ func decided(raw Value) string {
 		return "64-bit integers"
 	}
 	if m := section("dhcp"); m != nil {
-		for _, z := range m.Keys() {
-			if pool, _ := m.vals[z].(*Map); pool != nil && beyond64(pool.get("lease_time", nil)) {
+		for _, v := range m.Values() {
+			if pool, _ := v.(*Map); pool != nil && beyond64(pool.get("lease_time", nil)) {
 				return "64-bit integers"
 			}
 		}
