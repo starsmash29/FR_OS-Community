@@ -536,11 +536,16 @@ func portRange(s string) (int, int, bool) {
 }
 
 func validatePortSpec(v Value, what string) string {
+	// Decided (testdata/reference/decisions.md): 1.x takes true for port
+	// 1 and keeps it as "True", which reaches the nft script.
+	if v == Value(true) {
+		fail("%s: expected an integer port or 'start-end' range string, got True", what)
+	}
 	if isInt(v) {
 		if !intIn(v, 1, 65535) {
 			fail("%s: port %s out of range 1-65535", what, pyStr(v))
 		}
-		return pyStr(v) // str(True) is "True": 1.x keeps it so
+		return pyStr(v)
 	}
 	if s, ok := v.(string); ok {
 		if lo, hi, ok := portRange(s); ok {
@@ -554,8 +559,7 @@ func validatePortSpec(v Value, what string) string {
 	return ""
 }
 
-// portBounds is a port spec's first and last port. A spec 1.x stored
-// as "True" makes 1.x crash here; it is refused instead.
+// portBounds is a port spec's first and last port.
 func portBounds(spec, what string) (int, int) {
 	lo, hi, found := strings.Cut(spec, "-")
 	low, err1 := strconv.Atoi(lo)
@@ -677,13 +681,15 @@ func parseNat(raw Value, zones *Ordered[Zone]) NatConfig {
 			fail("nat.port_forwards[%s]: proto must be tcp or udp, got %s", strRepr(name), strRepr(proto))
 		}
 		dst := body.get("dst_port", nil)
-		if !isInt(dst) || !intIn(dst, 1, 65535) {
+		// A bool is refused (decided, as in validatePortSpec): 1.x prints
+		// true as "True" in the nft script.
+		if !isInt(dst) || dst == Value(true) || !intIn(dst, 1, 65535) {
 			fail("nat.port_forwards[%s]: dst_port must be an integer 1-65535", strRepr(name))
 		}
 		to := body.get("to_address", nil)
 		validateAddress(to, fmt.Sprintf("nat.port_forwards[%s] to_address", strRepr(name)))
 		toPort := body.get("to_port", dst)
-		if !isInt(toPort) || !intIn(toPort, 1, 65535) {
+		if !isInt(toPort) || toPort == Value(true) || !intIn(toPort, 1, 65535) {
 			fail("nat.port_forwards[%s]: to_port must be an integer 1-65535", strRepr(name))
 		}
 		nat.PortForwards = append(nat.PortForwards, PortForward{

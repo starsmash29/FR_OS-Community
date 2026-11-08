@@ -70,6 +70,21 @@ func decided(raw Value) string {
 	if m := section("adblocker"); m != nil && beyond64(m.get("xdp_critical_limit", nil)) {
 		return "64-bit integers"
 	}
+	if rules, _ := top.get("rules", nil).([]Value); rules != nil {
+		for _, r := range rules {
+			if r, _ := r.(*Map); r != nil && r.get("dst_port", nil) == Value(true) {
+				return "boolean ports"
+			}
+		}
+	}
+	if m := section("nat"); m != nil {
+		forwards, _ := m.get("port_forwards", nil).([]Value)
+		for _, f := range forwards {
+			if f, _ := f.(*Map); f != nil && (f.get("dst_port", nil) == Value(true) || f.get("to_port", nil) == Value(true)) {
+				return "boolean ports"
+			}
+		}
+	}
 	if m := section("dhcp"); m != nil {
 		for _, v := range m.Values() {
 			if pool, _ := v.(*Map); pool != nil && beyond64(pool.get("lease_time", nil)) {
