@@ -64,7 +64,7 @@ such as sorting unknown keys of different types.
 
 ## 2026-11-08: a port given as `true` is refused
 
-Proposed in FR_OS-Community PR #4 (phase 1c); awaiting the owner's
+Proposed in FR_OS-Community PR #4 (phase 1c); decided with the owner's
 "Mehet".
 
 - Cases: configs whose rule `dst_port`, or port forward `dst_port` or
