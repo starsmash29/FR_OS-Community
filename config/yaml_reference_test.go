@@ -87,7 +87,7 @@ func TestYAMLConfigReference(t *testing.T) {
 			continue
 		}
 		_, err = Parse(raw)
-		if name := decided(raw); name != "" && c.OK {
+		if name := Decided(raw); name != "" && c.OK {
 			if err == nil {
 				t.Errorf("%s: decision %q: accepted here", c.ID, name)
 			}

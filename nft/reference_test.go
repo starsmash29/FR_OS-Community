@@ -24,12 +24,21 @@ func TestReference(t *testing.T) {
 	defer func(l *time.Location) { config.Local = l }(config.Local)
 	config.Local = time.UTC
 
+	decided := 0
 	for _, c := range cases {
 		raw, err := config.ParseJSON(c.Input)
 		if err != nil {
 			t.Fatalf("%s: %v", c.ID, err)
 		}
 		cfg, err := config.Parse(raw)
+		if name := config.Decided(raw); name != "" {
+			// 2.x refuses the config by decision (decisions.md).
+			if err == nil {
+				t.Errorf("%s: decision %q: accepted here", c.ID, name)
+			}
+			decided++
+			continue
+		}
 		if err != nil {
 			t.Errorf("%s: 1.x built a ruleset from it, refused here: %v", c.ID, err)
 			continue
@@ -55,7 +64,7 @@ func TestReference(t *testing.T) {
 			t.Errorf("%s: differs from 1.x at line %s", c.ID, firstDiff(c.Output, got))
 		}
 	}
-	t.Logf("%d rulesets compared", len(cases))
+	t.Logf("%d rulesets: %d compared, %d from configs refused by decision", len(cases), len(cases)-decided, decided)
 }
 
 // firstDiff says where two scripts part: the line number and both lines.
