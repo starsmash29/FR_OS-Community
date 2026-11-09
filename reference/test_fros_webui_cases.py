@@ -45,6 +45,7 @@ import pyotp
 import pytest
 from fastapi.testclient import TestClient
 
+import frfw
 from frfw.helper import client as helper_client
 from frfw.helper import update_client
 from frfw.webui import mfa as webui_mfa
@@ -377,6 +378,9 @@ def _session(webui, name: str, setup: dict, steps: list, table: list | None = No
     fake, root = webui(name, table or [], programs)
     _setup(root, setup)
     files_before = _files(root)
+    # What the setup drew (salts, the session key) is in files_before;
+    # the steps draw from here on.
+    random_start = fake.used
     fake.system.active = True
     app = create_app()
     client = TestClient(app, base_url="https://router.lan", follow_redirects=False,
@@ -431,7 +435,8 @@ def _session(webui, name: str, setup: dict, steps: list, table: list | None = No
         last = body.decode("utf-8", "replace")
     fake.system.active = False
     case = {
-        "session": name, "now": NOW, "random": fake.random[:fake.used].hex(),
+        "session": name, "version": frfw.__version__, "codename": frfw.__codename__, "now": NOW,
+        "random": fake.random[:fake.used].hex(), "random_start": random_start,
         "cpus": CPUS, "disk": list(DISK), "uname": list(UNAME), "table": table or [], "base": BASE,
         "programs": programs, "program_base": fake.system.table[len(programs):],
         "files_before": files_before, "steps": recorded, "files_after": _files(root),

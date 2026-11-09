@@ -1,0 +1,36 @@
+{{define "title"}}Sign in - FR_OS{{end}}
+{{define "page"}}
+<main class="auth-page">
+  <div class="auth-shell">
+{{template "auth_brand" .}}
+      <dl class="auth-facts">
+        <div><dt>Router</dt><dd>{{.Hostname}}</dd></div>
+        <div><dt>Release</dt><dd>{{.Version}}{{if .Codename}} &middot; {{.Codename}}{{end}}</dd></div>
+        <div><dt>Sign-in attempts</dt><dd>rate-limited per client</dd></div>
+        <div><dt>Audit</dt><dd>every sign-in and change is logged</dd></div>
+      </dl>
+    </section>
+
+    <section class="auth-card">
+      {{if .Data.NoAccount}}
+      <h2>No account yet</h2>
+      <p class="muted">This router has no webUI account. For safety one can't be created from the network: on the router's console (or over SSH) run</p>
+      <pre><code>firewall-cli set-admin-password</code></pre>
+      <p class="muted">then reload this page and sign in.</p>
+      {{else}}
+      <h2>Sign in</h2>
+      <p class="muted">Sign in to manage this router.</p>
+      {{if .Error}}<div class="flash-error">{{.Error}}</div>{{end}}
+      <form method="post" action="/login">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" autofocus required>
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+        <button type="submit"><svg class="icon icon-sm"><use href="/static/icons.svg#lock"/></svg>Sign in</button>
+      </form>
+      {{end}}
+      <div class="auth-foot">Read-only accounts can sign in here too; they see every screen but cannot change anything.</div>
+    </section>
+  </div>
+</main>
+{{end}}

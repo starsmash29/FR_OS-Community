@@ -197,3 +197,42 @@ of the recorded ones writes two backups in one second; the run of the
 1.x webUI against the Go helper (2026-11-09) showed it. Why: losing a
 rollback point silently is worse than a name 1.x never makes. The 1.x
 bug is to be reported there too.
+
+## 2026-11-09: the webUI (phase 3a-1: sign-in, accounts, second factors, the apply buttons)
+
+`webui` replays every recorded webUI session (`webui.jsonl`) step for
+step: status, headers, body, helper requests and the files left. Where
+it differs from 1.x on purpose:
+
+- **Pages are compared as HTML tokens**, entities decoded and
+  whitespace collapsed, not byte for byte: Jinja and `html/template`
+  write the same page with different spacing and escapes. JSON bodies,
+  redirects and cookies are compared exactly.
+- **Not ported yet, skipped by the replay:** the dashboard (`GET /`,
+  phase 3a-2) and the authenticator app's QR code (segno's SVG, 3a-2);
+  every other screen answers `501 {"detail":"Not ported to FR_OS 2
+  yet"}` after signing in, until 3b-3d.
+- **No `/docs`, `/redoc` or `/openapi.json`.** 1.x's FastAPI serves
+  them to anyone, signed in or not, which lists every route and form
+  field; FR_OS 2 doesn't (they answer 404). The 1.x finding is to be
+  reported there.
+- **Static files** carry an ETag of their content and no
+  Last-Modified (Starlette uses the file's size and time); the replay
+  ignores both headers.
+- **Session cookies** compress their payload with Go's zlib, whose
+  output can differ from C zlib's for the same input; either reads the
+  other's, and the replay's cookies are short enough not to be
+  compressed. Cases: none differ.
+- **Security keys** are checked with go-webauthn, which normalizes the
+  origin and accepts `crossOrigin`, as py_webauthn does. The sign count
+  must go up unless both counts are 0 (1.x's rule).
+- **fr-webui** makes its self-signed certificate with crypto/x509 (RSA
+  2048, 10 years, the same names) instead of running `openssl req`, and
+  recognizes 1.x's own pre-phase-20 certificate by parsing it (CN and
+  issuer exactly `fr-router`, no subjectAltName) instead of by
+  substring of `openssl x509` output. Go's TLS doesn't read OpenSSL's
+  config, so the unit has no `OPENSSL_CONF`; Go's default key exchange
+  already prefers X25519MLKEM768, and with PQC on the listener is TLS
+  1.3-only, as in 1.x.
+- **A POST to /apply while the apply-helper is down** is a 500, as in
+  1.x; a clearer message is left for later.

@@ -61,7 +61,11 @@ scan), and moving the webUI's address and refreshing the ad-block
 lists, through its
 apply-helper against a fake system (every path under a directory of its
 own, every program and every download answered from a table, steps
-made to fail one by one) and records the programs run, the replies and the files left. The
+made to fail one by one) and records the programs run, the replies and the files left;
+and `reference/test_fros_webui_cases.py`, which takes 1.x's webUI
+through sessions of requests (sign-in, accounts, second factors with a
+software security key, the apply buttons) with a recorded clock, random
+bytes and helper answers, and records every answer and the files left. The
 Go packages replay those cases:
 
 - the config package must load the same YAML to the same values, write
@@ -71,6 +75,9 @@ Go packages replay those cases:
 - the apply-helper must give the same reply to the same request, and run
   nft with the same arguments;
 - the renderers must write the same files, byte for byte;
+- the webUI must give the same answer to the same request (pages
+  compared as HTML tokens), ask the helpers the same and leave the same
+  files;
 - an apply must run the same programs, with the same input and timeout,
   in the same order, answer the same, and leave the same files.
 
@@ -152,6 +159,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time |
 | `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.provision`, `frfw.transaction` and `frfw.apply`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
+| `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, and the screens as they are ported, replayed against 1.x's recorded sessions (`webui.jsonl`); `cmd/fr-webui` serves it over HTTPS |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |

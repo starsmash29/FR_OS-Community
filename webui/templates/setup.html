@@ -1,0 +1,36 @@
+{{define "title"}}Finish setup - FR_OS{{end}}
+{{define "page"}}
+<main class="auth-page">
+  <div class="auth-shell">
+{{template "auth_brand" .}}
+      <dl class="auth-facts">
+        <div><dt>Router</dt><dd>{{.Hostname}}</dd></div>
+        <div><dt>Step</dt><dd>first sign-in</dd></div>
+      </dl>
+    </section>
+
+    <section class="auth-card">
+      <h2>Finish setup</h2>
+      <p class="muted">You signed in with the password generated at first boot. Choose your own username and password
+        before anything else: <code>{{.Data.Current}}</code> and the generated password stop working, and the password
+        disappears from the console.</p>
+      {{if .Error}}<div class="flash-error">{{.Error}}</div>{{end}}
+      <form method="post" action="/setup">
+        {{.CSRFInput}}
+        <label for="username">New username</label>
+        <input type="text" id="username" name="username" autocomplete="username" autofocus required
+               pattern="[a-z_][a-z0-9_.\-]{0,31}" placeholder="not admin or root">
+        <label for="password">New password</label>
+        <input type="password" id="password" name="password" autocomplete="new-password" minlength="{{.MinPassword}}" required>
+        <label for="password_confirm">Confirm password</label>
+        <input type="password" id="password_confirm" name="password_confirm" autocomplete="new-password" minlength="{{.MinPassword}}" required>
+        <button type="submit"><svg class="icon icon-sm"><use href="/static/icons.svg#lock"/></svg>Save and continue</button>
+      </form>
+      <form method="post" action="/logout">
+        {{.CSRFInput}}
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </section>
+  </div>
+</main>
+{{end}}

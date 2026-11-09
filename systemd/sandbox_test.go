@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -46,7 +47,8 @@ var never = []string{"CAP_SYS_MODULE", "CAP_SYS_PTRACE", "CAP_SYS_BOOT", "CAP_SY
 	"CAP_SYS_TTY_CONFIG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND"}
 
 // exposure is the `systemd-analyze security` budget (0 best, 10 worst).
-var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-revert.service": 4.5}
+var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-revert.service": 4.5,
+	"fr-webui.service": 2.5}
 
 // service is a unit's [Service]: each key and every value it is given.
 func service(t *testing.T, name string) map[string][]string {
@@ -117,6 +119,29 @@ func TestSandbox(t *testing.T) {
 		if _, ok := s["User"]; !ok && root[name] == "" {
 			t.Errorf("%s runs as root without a reason in root", name)
 		}
+	}
+}
+
+// The webUI writes only its own state, with private files, and talks
+// only TCP and to the helpers' sockets (as 1.x's
+// test_the_webui_writes_only_its_own_state).
+func TestTheWebUIWritesOnlyItsOwnState(t *testing.T) {
+	s := service(t, "fr-webui.service")
+	if got := last(s, "ReadWritePaths"); got != "/etc/fr_os/webui" {
+		t.Errorf("ReadWritePaths=%q", got)
+	}
+	if got := last(s, "UMask"); got != "0077" {
+		t.Errorf("UMask=%q", got)
+	}
+	if got := strings.Fields(last(s, "RestrictAddressFamilies")); !slices.Equal(slices.Sorted(slices.Values(got)),
+		[]string{"AF_INET", "AF_INET6", "AF_UNIX"}) {
+		t.Errorf("RestrictAddressFamilies=%q", got)
+	}
+	if got := last(s, "CapabilityBoundingSet"); got != "CAP_NET_BIND_SERVICE" {
+		t.Errorf("CapabilityBoundingSet=%q", got)
+	}
+	if got := last(s, "User"); got != "fr_os-webui" {
+		t.Errorf("User=%q", got)
 	}
 }
 

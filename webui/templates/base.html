@@ -1,0 +1,82 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="csrf-token" content="{{.CSRF}}">
+<title>{{block "title" .}}FR_OS{{end}}</title>
+<link rel="stylesheet" href="/static/fros.css?v={{.Version}}">
+<script src="/static/forms.js?v={{.Version}}" defer></script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23070f19'/%3E%3Cpath d='M16 5l9 3.5v6.8c0 5.6-3.8 10.1-9 11.7-5.2-1.6-9-6.1-9-11.7V8.5z' fill='none' stroke='%234cd7f6' stroke-width='2.2'/%3E%3C/svg%3E">
+</head>
+<body class="{{if .IsViewer}}role-viewer{{end}}">
+{{block "page" .}}
+{{if .Username}}
+<input type="checkbox" id="nav-toggle" aria-hidden="true">
+<header class="topbar">
+  <div class="topbar-left">
+    <label for="nav-toggle" class="icon-button nav-toggle-button" title="Menu"><svg class="icon"><use href="/static/icons.svg#menu"/></svg></label>
+    <a class="brand" href="/">
+      <span class="brand-mark"><svg class="icon"><use href="/static/icons.svg#shield"/></svg></span>
+      <span class="brand-name">FR_OS</span>
+    </a>
+    <span class="chip hide-narrow" title="Installed release">v{{.Version}}{{if .Codename}} &middot; {{.Codename}}{{end}}</span>
+    <span class="divider-v hide-narrow"></span>
+    <span class="host"><span class="status-dot"></span><span class="host-name">{{.Hostname}}</span></span>
+  </div>
+  <div class="topbar-right">
+    <a class="user" href="/account" title="Account">
+      <span class="avatar"><svg class="icon"><use href="/static/icons.svg#person"/></svg></span>
+      <span class="user-text">
+        <span class="user-name">{{.Username}}</span>
+        <span class="user-role">{{if .IsViewer}}Read-only{{else}}Admin{{end}}</span>
+      </span>
+    </a>
+    <form method="post" action="/logout" class="allow-viewer">
+      {{.CSRFInput}}
+      <button type="submit" class="icon-button" title="Logout" aria-label="Logout"><svg class="icon"><use href="/static/icons.svg#logout"/></svg></button>
+    </form>
+  </div>
+</header>
+<nav class="sidebar" aria-label="Main">
+  {{range .Nav}}
+  <div class="nav-section">
+    <div class="nav-heading">{{.Section}}</div>
+    {{range .Items}}
+    <a class="nav-link{{if .Active}} active{{end}}" href="{{.Href}}"><svg class="icon"><use href="/static/icons.svg#{{.Icon}}"/></svg>{{.Label}}</a>
+    {{end}}
+  </div>
+  {{end}}
+</nav>
+<main class="content">
+<div class="content-inner">
+{{with .Here}}<div class="breadcrumb"><span>FR_OS</span><span>{{.Section}}</span><span class="here">{{.Label}}</span></div>{{end}}
+{{with .UpdateNotice}}{{if .Security}}<div class="flash-error">Security update available: FR_OS {{.Latest}}. Install it on the <a href="/update">Update</a> screen.</div>
+{{else}}<div class="notice">FR_OS {{.Latest}} is available -- see <a href="/update">Update</a>.</div>{{end}}{{end}}
+{{with .Held}}{{if .Pending}}<div class="flash-error apply-pending" role="alert">
+<strong>This apply is waiting for confirmation.</strong> Unless it is confirmed, the router goes back to the config applied before it in {{.Remaining}} s{{if .By}} (applied by {{.By}}){{end}}.
+{{if .Addresses}} The webUI now listens on {{.Addresses}}.{{end}}
+{{if not $.IsViewer}}<form method="post" action="/apply/confirm" style="display:inline">{{$.CSRFInput}}<input type="hidden" name="id" value="{{.ID}}"><button type="submit">Confirm</button></form>
+<form method="post" action="/apply/revert" style="display:inline">{{$.CSRFInput}}<button type="submit" class="danger">Go back now</button></form>{{end}}
+</div>
+{{else if .Rejected}}<div class="notice">An apply was not confirmed, and the router went back to the config applied before it. Its config is kept{{if not $.IsViewer}}: <form method="post" action="/apply/rejected/restore" style="display:inline">{{$.CSRFInput}}<button type="submit" class="secondary">Load it to fix it</button></form>{{else}}.{{end}}</div>{{end}}{{end}}
+{{if .IsViewer}}<div class="readonly-banner"><svg class="icon"><use href="/static/icons.svg#visibility"/></svg><span>Read-only account: you can look at everything, but changes are disabled. You can change your own password under <a href="/account">Account</a>.</span></div>{{end}}
+{{if .Error}}<div class="flash-error">{{.Error}}</div>{{end}}
+{{if .Success}}<div class="flash-success">{{.Success}}</div>{{end}}
+{{block "content" .}}{{end}}
+</div>
+</main>
+{{else}}
+<main class="auth-page">
+<div style="width:100%;max-width:460px;">
+{{if .Error}}<div class="flash-error">{{.Error}}</div>{{end}}
+{{if .Success}}<div class="flash-success">{{.Success}}</div>{{end}}
+{{template "content" .}}
+</div>
+</main>
+{{end}}
+{{end}}
+</body>
+</html>
+{{end}}

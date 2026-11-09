@@ -256,3 +256,67 @@ type ApplyFetch struct {
 
 // ApplyCases is every recorded apply session.
 func ApplyCases() ([]ApplyCase, error) { return load[ApplyCase]("apply.jsonl") }
+
+// WebUIStep is one request of a webUI session and 1.x's answer: the
+// form or JSON body and the headers and cookies sent; the status, the
+// headers (but date, server and content-length) and the body (Hex when
+// it isn't UTF-8, SHA256 when it is large); the helper requests it made,
+// with the replies, and the programs it ran. A step with only Advance
+// moves the clock that many seconds.
+type WebUIStep struct {
+	Advance         *float64          `json:"advance,omitempty"`
+	Method          string            `json:"method"`
+	Path            string            `json:"path"`
+	Form            map[string]string `json:"form"`
+	JSON            jsontext.Value    `json:"json"`
+	Headers         map[string]string `json:"headers"`
+	Cookies         map[string]string `json:"cookies"`
+	Status          int               `json:"status"`
+	ResponseHeaders [][2]string       `json:"response_headers"`
+	Helper          jsontext.Value    `json:"helper"`
+	Programs        jsontext.Value    `json:"programs"`
+	Body            *string           `json:"body,omitempty"`
+	BodyHex         string            `json:"body_hex,omitempty"`
+	BodySHA256      string            `json:"body_sha256,omitempty"`
+}
+
+// WebUICase is one session with 1.x's webUI through Starlette's
+// TestClient, at https://router.lan (reference/test_fros_webui_cases.py).
+// Random is the randomness it drew (hex): the setup's first, then the
+// steps' from RandomStart on. Table answers the helpers before Base
+// does (the first entry for the command and socket; Times limits how
+// often, Error makes it unreachable); Programs and ProgramBase answer
+// the programs. FilesBefore and FilesAfter are the tree, each file its
+// text or {"hex"} or {"sha256", "size"}.
+type WebUICase struct {
+	ID          string                    `json:"id"`
+	Session     string                    `json:"session"`
+	Version     string                    `json:"version"`
+	Codename    string                    `json:"codename"`
+	Now         float64                   `json:"now"`
+	Random      string                    `json:"random"`
+	RandomStart int                       `json:"random_start"`
+	CPUs        int                       `json:"cpus"`
+	Disk        []int64                   `json:"disk"`
+	Uname       []string                  `json:"uname"`
+	Table       []WebUIAnswer             `json:"table"`
+	Base        []WebUIAnswer             `json:"base"`
+	Programs    []ApplyAnswer             `json:"programs"`
+	ProgramBase []ApplyAnswer             `json:"program_base"`
+	FilesBefore map[string]jsontext.Value `json:"files_before"`
+	Steps       []WebUIStep               `json:"steps"`
+	FilesAfter  map[string]jsontext.Value `json:"files_after"`
+	Leaks       []string                  `json:"leaks"`
+}
+
+// WebUIAnswer is what a helper answers a command with.
+type WebUIAnswer struct {
+	Cmd    string         `json:"cmd"`
+	Socket string         `json:"socket,omitempty"`
+	Times  *int           `json:"times,omitempty"`
+	Error  jsontext.Value `json:"error,omitempty"`
+	Reply  jsontext.Value `json:"reply,omitempty"`
+}
+
+// WebUICases is every recorded webUI session.
+func WebUICases() ([]WebUICase, error) { return load[WebUICase]("webui.jsonl") }
