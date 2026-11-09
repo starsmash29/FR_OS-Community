@@ -1,0 +1,188 @@
+{{define "title"}}Dashboard - FR_OS{{end}}
+{{define "content"}}{{$d := .Data}}
+<section class="card hero">
+  <div class="hero-id">
+    <div class="hero-mark"><svg class="icon icon-lg"><use href="/static/icons.svg#router"/></svg><span class="status-dot{{if not $d.ConfigValid}} bad{{end}}"></span></div>
+    <div>
+      <h1>{{$d.Hostname}}</h1>
+      <div class="hero-meta">
+        <span>FR_OS {{.Version}}{{if .Codename}} &ldquo;{{.Codename}}&rdquo;{{end}}</span>
+        {{if $d.Kernel}}<span>Kernel {{$d.Kernel}}</span>{{end}}
+        {{if $d.CPUModel}}<span>{{$d.CPUModel}}{{if $d.CPUCount}} ({{$d.CPUCount}} CPU){{end}}</span>{{end}}
+      </div>
+      <div class="hero-meta" style="margin-top:0.5rem;">
+        {{if $d.ConfigValid}}<span class="badge badge-green">config valid</span>{{else}}<span class="badge badge-red">config invalid</span>{{end}}
+        {{if $d.PQCShown}}
+        <span class="muted">Management session:
+          {{if $d.QuantumSafe}}
+          <span class="badge badge-green">Quantum-safe (hybrid X25519MLKEM768)</span>
+          {{else if $d.PQCEnabled}}
+          <span class="badge badge-yellow">PQC enabled, not yet active</span>
+          {{else}}
+          <span class="badge badge-red">Classical only</span>
+          {{end}}
+          <a href="/system">details</a></span>
+        {{end}}
+      </div>
+    </div>
+  </div>
+  <div class="actions">
+    <form method="post" action="/apply" class="inline">
+      {{.CSRFInput}}
+      <button type="submit"><svg class="icon icon-sm"><use href="/static/icons.svg#play_arrow"/></svg>Apply now</button>
+    </form>
+    <form method="post" action="/apply?dry_run=1" class="inline">
+      {{.CSRFInput}}
+      <button type="submit" class="secondary"><svg class="icon icon-sm"><use href="/static/icons.svg#science"/></svg>Dry-run only</button>
+    </form>
+    <form method="post" action="/rollback" class="inline" data-confirm="Roll back to the previous firewall ruleset?">
+      {{.CSRFInput}}
+      <button type="submit" class="danger"><svg class="icon icon-sm"><use href="/static/icons.svg#undo"/></svg>Rollback firewall ruleset</button>
+    </form>
+  </div>
+</section>
+
+{{if $d.Alerts}}
+<section class="card" style="border-color: var(--error);">
+  <div class="card-head"><h3><svg class="icon "><use href="/static/icons.svg#warning"/></svg>Security alerts ({{len $d.Alerts}} new)</h3>
+    <form method="post" action="/alerts/seen" class="inline">
+      {{.CSRFInput}}
+      <input type="hidden" name="until" value="{{$d.AlertsUntil}}">
+      <button type="submit" class="secondary">Mark as seen</button>
+    </form>
+  </div>
+  <p class="muted">Changes that give someone a way in -- check each one was you or someone you trust.
+    All of them are in the audit log on the Users screen.</p>
+  <table>
+    <tr><th>When</th><th>What</th><th>From</th></tr>
+    {{range $d.Alerts}}
+    <tr><td>{{.When}}</td><td>{{.Alert}}</td><td>{{.Client}}</td></tr>
+    {{end}}
+  </table>
+</section>
+{{end}}
+<section class="card" id="security-score">
+  <div class="card-head"><h3><svg class="icon "><use href="/static/icons.svg#verified_user"/></svg>Security score: {{$d.Score.Percent}}%</h3><a href="/security" class="muted">checklist</a></div>
+  {{with $d.Score.Open}}
+  <ul>{{range .}}<li><a href="{{.Link}}">{{.Title}}</a> -- {{.Detail}}</li>{{end}}</ul>
+  {{else}}
+  <p>Every checked item is in order ({{$d.Score.Passed}} / {{$d.Score.Known}}).</p>
+  {{end}}
+</section>
+
+{{if $d.LiveNoPersist}}
+<div class="flash-mock">This live system has no persistence: changes are lost at the next reboot. See <a href="/system">System</a>.</div>
+{{end}}
+{{if not $d.ConfigValid}}
+<div class="flash-error">The saved config does not currently pass validation -- fix it on the relevant screen before applying.</div>
+{{end}}
+
+<div class="stats">
+  <a class="stat" href="/rules">
+    <div class="stat-top"><span class="stat-label">Firewall rules</span><span class="stat-icon"><svg class="icon icon-sm"><use href="/static/icons.svg#security"/></svg></span></div>
+    <div class="stat-value">{{$d.RuleCount}}</div>
+    <div class="stat-sub">{{$d.PortForwards}} port forward(s) &middot; {{$d.ZoneCount}} zone(s)</div>
+  </a>
+  <a class="stat" href="/interfaces">
+    <div class="stat-top"><span class="stat-label">Interfaces</span><span class="stat-icon"><svg class="icon icon-sm"><use href="/static/icons.svg#settings_ethernet"/></svg></span></div>
+    {{if $d.LinksKnown}}
+    <div class="stat-value">{{$d.LinksUp}}<small>/ {{$d.LinksKnown}} link up</small></div>
+    {{else}}
+    <div class="stat-value">{{$d.InterfaceCount}}<small>configured</small></div>
+    {{end}}
+    <div class="stat-sub">DHCP on {{$d.DHCPZones}} zone(s)</div>
+  </a>
+  <a class="stat" href="/ai-ids">
+    <div class="stat-top"><span class="stat-label">Quarantined hosts</span><span class="stat-icon"><svg class="icon icon-sm"><use href="/static/icons.svg#psychology"/></svg></span></div>
+    {{if and $d.AIIDSEnabled $d.Quarantined}}
+    <div class="stat-value">{{$d.Quarantined}}</div>
+    <div class="stat-sub">AI IDS engine {{if $d.AIIDSRunning}}running{{else}}not running{{end}}</div>
+    {{else}}
+    <div class="stat-value">-</div>
+    <div class="stat-sub">{{if $d.AIIDSEnabled}}quarantine status unavailable{{else}}AI IDS/IPS is off{{end}}</div>
+    {{end}}
+  </a>
+  <a class="stat" href="/adblock">
+    <div class="stat-top"><span class="stat-label">Blocked domains</span><span class="stat-icon"><svg class="icon icon-sm"><use href="/static/icons.svg#block"/></svg></span></div>
+    <div class="stat-value">{{$d.BlockedDomains}}</div>
+    <div class="stat-sub">{{if $d.AdblockEnabled}}DNS filtering on{{else}}DNS filtering is off{{end}}</div>
+  </a>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head"><h3><svg class="icon "><use href="/static/icons.svg#shield_lock"/></svg>Protection services</h3></div>
+    {{if $d.Services}}
+    <div class="service-list">
+      {{range $d.Services}}
+      <div class="service">
+        <div>
+          <div class="service-name"><span class="status-dot{{if or (eq .State "running") (eq .State "on")}}{{else if eq .State "not running"}} bad{{else}} off{{end}}"></span><a href="{{.Href}}" style="color:inherit;">{{.Name}}</a></div>
+          <div class="service-desc">{{.Desc}}</div>
+        </div>
+        <span class="badge {{if or (eq .State "running") (eq .State "on")}}badge-green{{else if eq .State "not running"}}badge-red{{end}}">{{.State}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="muted">Service states appear once the saved config is valid.</p>
+    {{end}}
+    {{if $d.AIIDSEnabled}}
+    <p class="muted" style="margin-top:0.9rem;">
+      AI IDS/IPS:
+      {{if $d.Quarantined}}
+      <strong>{{$d.Quarantined}}</strong> host(s) currently quarantined
+      {{else}}
+      quarantine status unavailable
+      {{end}}
+      &middot; <a href="/ai-ids">details</a>
+    </p>
+    {{end}}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h3><svg class="icon "><use href="/static/icons.svg#memory"/></svg>System resources</h3><span class="muted">uptime {{$d.Uptime}}</span></div>
+    {{range $d.Meters}}
+    <div class="meter">
+      <div class="meter-row"><span>{{.Label}}</span><strong>{{.Percent}}</strong></div>
+      <div class="progress-track"><div class="progress-fill" style="width:{{.Width}}%;"></div></div>
+    </div>
+    {{end}}
+    <p class="muted" style="margin-top:1rem;">Ruleset backups available for rollback: {{$d.Backups}} &middot; Prometheus metrics: <a href="/system">System &rarr; Multi-site monitoring</a> (off until a token is generated)</p>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head"><h3><svg class="icon "><use href="/static/icons.svg#lan"/></svg>Interfaces</h3><a href="/interfaces" class="muted">manage</a></div>
+  <table>
+    <tr><th>Zone</th><th>Device</th><th>Address</th><th>Link</th></tr>
+    {{range $d.Interfaces}}
+    <tr>
+      <td>{{.Zone}}</td><td>{{.Device}}</td><td>{{or .Address "-"}}</td>
+      <td><span class="badge {{if eq .Link "up"}}badge-green{{else if eq .Link "down"}}badge-red{{end}}">{{.Link}}</span></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="4" class="muted">No interfaces configured yet.</td></tr>
+    {{end}}
+  </table>
+  <p class="muted">Apply now pushes the saved config to the running system: interface addresses, the nftables firewall ruleset, and DHCP (Kea) if configured.</p>
+</section>
+
+{{if $d.DropsShown}}
+<section class="card">
+  <div class="card-head"><h3><svg class="icon "><use href="/static/icons.svg#block"/></svg>Recently dropped</h3><span class="muted">default deny, logged (rate-limited)</span></div>
+  {{if $d.Drops}}
+  <table>
+    <tr><th>When</th><th>Chain</th><th>From</th><th>To</th><th>Protocol / port</th><th>Interface</th></tr>
+    {{range $d.Drops}}
+    <tr><td>{{.When}}</td><td>{{.Chain}}</td><td>{{.Src}}</td><td>{{.Dst}}</td>
+      <td>{{.Proto}}{{if .HasDport}}/{{.Dport}}{{end}}</td><td>{{.In}}</td></tr>
+    {{end}}
+  </table>
+  {{else}}
+  <p class="muted">Nothing dropped lately.</p>
+  {{end}}
+  <p class="muted">Kept in the system journal within its size and age limit; admin sign-ins and changes are in the audit log.</p>
+</section>
+{{end}}
+{{end}}

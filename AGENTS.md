@@ -51,11 +51,12 @@ schedules, clocks and runtime members of every shape;
 `reference/test_fros_render_cases.py`, which has 1.x render every file
 its apply writes (Kea, dnsmasq, dhcpcd, the RA instance, the kernel's
 IPv6 settings, WireGuard, sshd, the PQC fragments) from each accepted
-config; and last `reference/test_fros_apply_cases.py`, which runs 1.x's
-applies, confirmations, reverts, rollbacks and saves, and the
-commands that act on one host (a ban, a quarantine, a ZTNA sign-in, IoT
-isolation, the conntrack sample, the activity log) and the ones that
-read the system for the webUI's views (the firewall's drops, WireGuard,
+config, and the QR codes its webUI draws; and last
+`reference/test_fros_apply_cases.py`, which runs 1.x's applies,
+confirmations, reverts, rollbacks and saves, and the commands that
+act on one host (a ban, a quarantine, a ZTNA sign-in, IoT isolation,
+the conntrack sample, the activity log) and the ones that read the
+system for the webUI's views (the firewall's drops, WireGuard,
 the XDP counters, IPv6, the listening sockets, the RAM modules, the IoT
 scan), and moving the webUI's address and refreshing the ad-block
 lists, through its
@@ -159,7 +160,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time |
 | `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.provision`, `frfw.transaction` and `frfw.apply`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
-| `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, and the screens as they are ported, replayed against 1.x's recorded sessions (`webui.jsonl`); `cmd/fr-webui` serves it over HTTPS |
+| `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts) and the screens as they are ported, replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |

@@ -37,8 +37,8 @@ import (
 
 // notPorted are the screens later parts of phase 3 port: their steps
 // are skipped (their helper requests still use up the answers they
-// used up in 1.x). TODO(3a-2): the dashboard.
-var notPorted = map[string]bool{"GET /": true}
+// used up in 1.x). Empty while every recorded step is ported.
+var notPorted = map[string]bool{}
 
 // maxText is the harness's MAX_TEXT: larger files are recorded by digest.
 const maxText = 1 << 18
@@ -160,15 +160,19 @@ func replay(t *testing.T, c reference.WebUICase) {
 	random := bytes.NewReader(stream[c.RandomStart:])
 	now := c.Now
 	helpers := newFakeHelpers(c)
+	programs := &fakePrograms{table: slices.Concat(c.Programs, c.ProgramBase), passed: map[int]int{}}
 	env := Env{
-		Now:   func() float64 { return now },
-		Rand:  random,
-		Local: time.UTC, // the harness runs with TZ=UTC
-		Paths: Paths{Root: root},
-		Send:  helpers.send,
-		Run: func(argv []string, _ float64) (int, string, error) {
-			t.Errorf("ran %q: no screen of phase 3a runs a program", argv)
-			return 1, "", fmt.Errorf("not in this test")
+		Now:    func() float64 { return now },
+		Rand:   random,
+		Local:  time.UTC, // the harness runs with TZ=UTC
+		Paths:  Paths{Root: root},
+		Send:   helpers.send,
+		Run:    programs.run,
+		Kernel: func() string { return c.Uname[2] },
+		CPUs:   func() int { return c.CPUs },
+		Disk: func(string) (int64, int64, bool) {
+			// os.statvfs_result: f_bsize, f_frsize, f_blocks, f_bfree, ...
+			return c.Disk[1] * (c.Disk[2] - c.Disk[3]), c.Disk[1] * c.Disk[2], true
 		},
 	}
 	server, err := New(env, c.Version, c.Codename)
@@ -186,7 +190,7 @@ func replay(t *testing.T, c reference.WebUICase) {
 			helpers.skip(t, step.Helper)
 			continue
 		}
-		helpers.calls = nil
+		helpers.calls, programs.calls = nil, nil
 		r := request1x(step)
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, r)
@@ -211,11 +215,56 @@ func replay(t *testing.T, c reference.WebUICase) {
 		if rooted(got) != want {
 			t.Errorf("%s: helper requests\n got %s\nwant %s", where, rooted(got), want)
 		}
+		var ran []reference.ApplyCall
+		if err := json.Unmarshal(step.Programs, &ran); err != nil {
+			t.Fatal(err)
+		}
+		var wantRan [][]string
+		for _, call := range ran {
+			wantRan = append(wantRan, call.Argv)
+		}
+		if !slices.EqualFunc(programs.calls, wantRan, slices.Equal) {
+			t.Errorf("%s: programs\n got %q\nwant %q", where, programs.calls, wantRan)
+		}
 	}
 	if random.Len() != 0 {
 		t.Errorf("drew %d random bytes fewer than 1.x", random.Len())
 	}
 	compareFiles(t, root, c.FilesAfter)
+}
+
+// fakePrograms is the harness's program table (test_fros_apply_cases
+// _Fake.run): the first entry whose argv starts the call's answers,
+// unless its "after" says it answers a later one. The argv run are
+// compared; the timeout is not (1.x runs systemctl is-active without
+// one, decisions.md).
+type fakePrograms struct {
+	table  []reference.ApplyAnswer
+	passed map[int]int
+	calls  [][]string
+}
+
+func (f *fakePrograms) run(argv []string, _ float64) (int, string, error) {
+	f.calls = append(f.calls, argv)
+	answer := reference.ApplyAnswer{}
+	for i, a := range f.table {
+		if len(argv) < len(a.Argv) || !slices.Equal(argv[:len(a.Argv)], a.Argv) {
+			continue
+		}
+		if f.passed[i] < a.After {
+			f.passed[i]++
+			continue
+		}
+		answer = a
+		break
+	}
+	switch answer.Error {
+	case "missing":
+		return -1, "", fmt.Errorf("%s: no such file or directory", argv[0])
+	case "timeout":
+		return -1, "", fmt.Errorf("%s: timed out", argv[0])
+	}
+	return answer.RC, answer.Stdout, nil
 }
 
 // request1x is the request Starlette's TestClient sent.
@@ -327,7 +376,6 @@ func compareBody(t *testing.T, where string, got []byte, step reference.WebUISte
 func htmlTokens(page string) []string {
 	z := html.NewTokenizer(strings.NewReader(page))
 	var out []string
-	skip := 0
 	for {
 		tt := z.Next()
 		if tt == html.ErrorToken {
@@ -336,19 +384,6 @@ func htmlTokens(page string) []string {
 		tok := z.Token()
 		switch tt {
 		case html.StartTagToken, html.SelfClosingTagToken:
-			if skip > 0 {
-				if tok.Data == "svg" && tt == html.StartTagToken {
-					skip++
-				}
-				continue
-			}
-			// TODO(3a-2): segno's QR code, ported byte for byte.
-			if tok.Data == "svg" && hasAttr(tok, "xmlns") {
-				if tt == html.StartTagToken {
-					skip = 1
-				}
-				continue
-			}
 			var b strings.Builder
 			b.WriteString("<" + tok.Data)
 			for _, a := range tok.Attr {
@@ -356,17 +391,8 @@ func htmlTokens(page string) []string {
 			}
 			out = append(out, b.String()+">")
 		case html.EndTagToken:
-			if skip > 0 {
-				if tok.Data == "svg" {
-					skip--
-				}
-				continue
-			}
 			out = append(out, "</"+tok.Data+">")
 		case html.TextToken:
-			if skip > 0 {
-				continue
-			}
 			if text := strings.Join(strings.Fields(tok.Data), " "); text != "" {
 				out = append(out, text)
 			}

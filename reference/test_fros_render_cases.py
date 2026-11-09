@@ -151,3 +151,42 @@ def test_pqc(tmp_path):
         _record({"pqc": "tls", "hybrid": hybrid, "output": {"tls": conf.read_text()}})
         kex = pqc._SSHD_DROPIN_TEMPLATE.format(kex_line=pqc.build_kex_line(hybrid=hybrid))
         _record({"pqc": "ssh", "hybrid": hybrid, "output": {"ssh": kex}})
+
+
+#: Texts for the QR codes 1.x's webUI draws (routes/mfa.py: the TOTP
+#: enrolment, scale 5; routes/vpn.py: a new VPN device, scale 4): each
+#: mode, versions with and without version information, every remainder
+#: length, a level boost, and texts that need a Micro QR Code or a
+#: non-Latin-1 encoding (FR_OS 2 refuses those: decisions.md).
+QR_TEXTS = [
+    "otpauth://totp/FR_OS:admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=FR_OS",
+    "otpauth://totp/FR_OS:a?secret=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&issuer=FR_OS",
+    "otpauth://totp/FR_OS:" + "operator" * 6 + "?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=FR_OS",
+    "12345678901234567890123456789",
+    "3141592653589793238462643383279502884197169399375105820974944592307816406286",
+    "HELLO WORLD $%*+-./: 0123456789 ABCDEFGHIJ",
+    "abcdefghijklmno",
+    "café résumé naïve über straße ±§",
+    "[Interface]\nPrivateKey = " + "A" * 43 + "=\nAddress = 10.99.0.2/32\nDNS = 10.99.0.1\n\n"
+    "[Peer]\nPublicKey = " + "B" * 43 + "=\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 0.0.0.0/0, ::/0\n",
+    "x" * 300,
+    "The quick brown fox jumps over the lazy dog. " * 22,
+    "y" * 1600,
+    "hello",
+    "árvíztűrő tükörfúrógép",
+]
+
+
+def test_qr():
+    import io
+
+    import segno
+
+    for scale in (5, 4):
+        for text in QR_TEXTS:
+            svg = io.BytesIO()
+            segno.make(text, error="m").save(svg, kind="svg", scale=scale, dark="#0C141F", light="#FFFFFF",
+                                             xmldecl=False)
+            capture = sys.modules.get("fros_capture")
+            if capture is not None:
+                capture._record("qr", {"text": text, "scale": scale, "svg": svg.getvalue().decode()})

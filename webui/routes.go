@@ -38,7 +38,7 @@ var routes = []route{
 	{"POST", "/account/mfa/remove", "login", (*Server).mfaRemove},
 	{"POST", "/users/mfa-policy", "admin", (*Server).mfaPolicy},
 	{"POST", "/users/{target}/mfa-reset", "admin", (*Server).mfaReset},
-	{"GET", "/", "login", nil},
+	{"GET", "/", "login", (*Server).dashboard},
 	{"POST", "/apply", "login", (*Server).applyNow},
 	{"POST", "/apply/confirm", "login", (*Server).applyConfirm},
 	{"POST", "/apply/revert", "login", (*Server).applyRevert},

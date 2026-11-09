@@ -37,7 +37,7 @@ out="$work/out"
 [ -s "$out/summary.json" ] || { tail -20 "$work/pytest.log" >&2; exit 1; }
 mkdir -p testdata/reference
 cp "$out/config.jsonl" "$out/ruleset.jsonl" "$out/yaml.jsonl" "$out/yaml_config.jsonl" "$out/helper.jsonl" \
-	"$out/render.jsonl" "$out/apply.jsonl" "$out/webui.jsonl" "$out/summary.json" \
+	"$out/render.jsonl" "$out/apply.jsonl" "$out/webui.jsonl" "$out/qr.jsonl" "$out/summary.json" \
 	testdata/reference/
 echo "$pin" >testdata/reference/PIN
 cat testdata/reference/summary.json

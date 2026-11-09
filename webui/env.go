@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/starsmash29/fr_os-community/config"
@@ -30,6 +32,13 @@ type Env struct {
 	// Run is a program run for the read-only views (systemctl
 	// is-active, ...): its exit status and output.
 	Run func(argv []string, timeout float64) (status int, stdout string, err error)
+	// Kernel is os.uname().release.
+	Kernel func() string
+	// CPUs is os.cpu_count(), 0 when not known.
+	CPUs func() int
+	// Disk is the used and total bytes of the file system at path
+	// (statvfs), ok false when it can't be read.
+	Disk func(path string) (used, total int64, ok bool)
 }
 
 // Paths are 1.x's frfw.paths the webUI uses, all under Root.
@@ -65,11 +74,14 @@ func (p Paths) UpdateSocket() string {
 // the real paths and sockets.
 func DefaultEnv() Env {
 	return Env{
-		Now:   func() float64 { return float64(time.Now().UnixNano()) / 1e9 },
-		Rand:  rand.Reader,
-		Local: time.Local,
-		Send:  sendCommand,
-		Run:   runProgram,
+		Now:    func() float64 { return float64(time.Now().UnixNano()) / 1e9 },
+		Rand:   rand.Reader,
+		Local:  time.Local,
+		Send:   sendCommand,
+		Run:    runProgram,
+		Kernel: kernelRelease,
+		CPUs:   runtime.NumCPU,
+		Disk:   diskUsage,
 	}
 }
 
@@ -91,3 +103,26 @@ func (e Env) tokenHex(n int) string { return hex.EncodeToString(e.bytes(n)) }
 
 // seconds is int(time.time()).
 func (e Env) seconds() int64 { return int64(e.Now()) }
+
+func kernelRelease() string {
+	var u syscall.Utsname
+	if syscall.Uname(&u) != nil {
+		return ""
+	}
+	var b []byte
+	for _, c := range u.Release {
+		if c == 0 {
+			break
+		}
+		b = append(b, byte(c))
+	}
+	return string(b)
+}
+
+func diskUsage(path string) (int64, int64, bool) {
+	var st syscall.Statfs_t
+	if syscall.Statfs(path, &st) != nil {
+		return 0, 0, false
+	}
+	return st.Frsize * int64(st.Blocks-st.Bfree), st.Frsize * int64(st.Blocks), true
+}

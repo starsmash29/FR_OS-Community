@@ -286,9 +286,15 @@ func (s *Server) mfaView(q *request, fresh *newTOTP) (*answer, error) {
 
 func (s *Server) mfaAccount(q *request) (*answer, error) { return s.mfaView(q, nil) }
 
-// qrSVG is the authenticator-app QR code for uri. Phase 3a-2 ports
-// segno's SVG byte for byte; until then the page shows the key only.
-func qrSVG(uri string) template.HTML { return "" }
+// qrSVG is the authenticator-app QR code for uri, as 1.x draws it
+// (scale 5); none when it can't be drawn as 1.x would.
+func qrSVG(uri string) template.HTML {
+	svg, err := qrSVGOf(uri, 5, "#0C141F", "#FFFFFF")
+	if err != nil {
+		return ""
+	}
+	return svg
+}
 
 func (s *Server) mfaTOTPStart(q *request) (*answer, error) {
 	secret := newTOTPSecret(s.env)

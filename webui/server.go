@@ -74,7 +74,7 @@ func New(env Env, version, codename string) (*Server, error) {
 	s.guard = newBruteforceGuard(env, env.Paths.LoginGuard(), deviceLookup(s.helper))
 	s.pages = map[string]*template.Template{}
 	base := template.Must(template.New("").ParseFS(templateFS, "templates/base.html", "templates/auth_head.html"))
-	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login"} {
+	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login", "dashboard"} {
 		t := template.Must(template.Must(base.Clone()).ParseFS(templateFS, "templates/"+name+".html"))
 		s.pages[name] = t
 	}

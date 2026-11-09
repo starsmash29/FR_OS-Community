@@ -208,10 +208,9 @@ it differs from 1.x on purpose:
   whitespace collapsed, not byte for byte: Jinja and `html/template`
   write the same page with different spacing and escapes. JSON bodies,
   redirects and cookies are compared exactly.
-- **Not ported yet, skipped by the replay:** the dashboard (`GET /`,
-  phase 3a-2) and the authenticator app's QR code (segno's SVG, 3a-2);
-  every other screen answers `501 {"detail":"Not ported to FR_OS 2
-  yet"}` after signing in, until 3b-3d.
+- **Not ported yet:** every screen other than the dashboard and the
+  account pages answers `501 {"detail":"Not ported to FR_OS 2 yet"}`
+  after signing in, until 3b-3d.
 - **No `/docs`, `/redoc` or `/openapi.json`.** 1.x's FastAPI serves
   them to anyone, signed in or not, which lists every route and form
   field; FR_OS 2 doesn't (they answer 404). The 1.x finding is to be
@@ -236,3 +235,33 @@ it differs from 1.x on purpose:
   1.3-only, as in 1.x.
 - **A POST to /apply while the apply-helper is down** is a 500, as in
   1.x; a clearer message is left for later.
+
+## 2026-11-09: the dashboard and the QR code (phase 3a-2)
+
+The dashboard (`GET /`) is replayed in every session of webui.jsonl:
+a full config, one whose services can't be reached, an invalid config,
+a clean one, and the apply-helper gone. Cases: none differ. Decided:
+
+- **Integrity is always unknown.** 1.x checks FR_OS's installed files
+  against a recorded hash list; FR_OS 2 has no such list yet, so the
+  security score's integrity item is "unknown" and counts neither way
+  (in the recorded sessions 1.x's is unknown too: the fake root has no
+  list).
+- **`systemctl is-active` gets 10 seconds.** 1.x waits for it without a
+  limit (ai_ids.daemon, tlsfp.daemon); FR_OS 2 gives it 10 seconds and
+  shows the daemon as not running after that. The program and its
+  arguments are the same.
+- **The "quantum-safe" badge** is read from the same OpenSSL fragment as
+  in 1.x. Go's TLS doesn't read it and always offers X25519MLKEM768, so
+  with PQC off the session can be hybrid while the badge says
+  "Classical only"; the badge says what the config asks for, as in 1.x.
+- **The dashboard is a 500 when the apply-helper is gone**, as in 1.x
+  (its HelperError isn't caught there; an OSError would be). A page
+  that shows what it can without the helper is left for later, and the
+  1.x behaviour is to be reported there.
+- **QR codes** are drawn by FR_OS 2's own encoder, held to segno 1.6.6
+  (qr.jsonl: each mode, versions 2-33, every remainder length, a raised
+  error level, both scales). It refuses what no page draws: a text short
+  enough for a Micro QR Code, and one that isn't Latin-1 (segno would
+  use Shift JIS or UTF-8); the TOTP page then shows no code, only the
+  secret. Cases: the three such texts in qr.jsonl.
