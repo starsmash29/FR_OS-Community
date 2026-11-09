@@ -1,15 +1,15 @@
 {
-  "apply": 99,
-  "config": 1717,
+  "apply": 122,
+  "config": 1719,
   "helper": 483,
-  "render": 1644,
-  "ruleset": 2197,
+  "render": 1648,
+  "ruleset": 2201,
   "skipped": {
     "config_not_json": 13,
     "ruleset_not_json": 0,
     "ruleset_unknown_config": 2,
     "yaml_not_text": 0
   },
-  "yaml": 1652,
-  "yaml_config": 214
+  "yaml": 1653,
+  "yaml_config": 215
 }
