@@ -47,6 +47,22 @@ func (s *Server) dispatch(cmd config.Value, request *config.Map) (any, error) {
 		return s.cmdRestoreRejected()
 	case "rollback":
 		return s.cmdRollback()
+	case "ban_ip":
+		return s.cmdBanIP(request)
+	case "source_device":
+		return s.cmdSourceDevice(request)
+	case "quarantine_ip":
+		return s.cmdQuarantineIP(request)
+	case "conntrack_sample":
+		return s.cmdConntrackSample()
+	case "authorize_ztna":
+		return s.cmdAuthorizeZtna(request)
+	case "ztna_status":
+		return s.cmdZtnaStatus(request)
+	case "iot_sync_isolation":
+		return s.cmdIotSyncIsolation(request)
+	case "audit_append":
+		return s.cmdAuditAppend(request)
 	case "save_config":
 		return s.cmdSaveConfig(request)
 	}

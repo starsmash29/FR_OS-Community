@@ -71,6 +71,10 @@ func replaceFile(path, tmpName, text string, mode fs.FileMode) error {
 
 // osErrorText is str(OSError) for the errors the steps report:
 // "[Errno 13] Permission denied: '/path'".
+// OSErrorText is an OSError's text as Python writes it, e.g.
+// "[Errno 2] No such file or directory: 'path'".
+func OSErrorText(err error) string { return osErrorText(err) }
+
 func osErrorText(err error) string {
 	var pe *fs.PathError
 	var no syscall.Errno

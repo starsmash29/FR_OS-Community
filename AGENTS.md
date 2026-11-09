@@ -52,7 +52,9 @@ schedules, clocks and runtime members of every shape;
 its apply writes (Kea, dnsmasq, dhcpcd, the RA instance, the kernel's
 IPv6 settings, WireGuard, sshd, the PQC fragments) from each accepted
 config; and last `reference/test_fros_apply_cases.py`, which runs 1.x's
-applies, confirmations, reverts, rollbacks and saves through its
+applies, confirmations, reverts, rollbacks and saves, and the
+commands that act on one host (a ban, a quarantine, a ZTNA sign-in, IoT
+isolation, the conntrack sample, the activity log), through its
 apply-helper against a fake system (every path under a directory of its
 own, every program answered from a table, steps made to fail one by
 one) and records the programs run, the replies and the files left. The
