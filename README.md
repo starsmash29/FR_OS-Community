@@ -1,96 +1,170 @@
-<h1 align="center">FR_OS Community Edition</h1>
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/FROSCOMWHI.svg">
-    <img src="docs/media/FROSCOM.svg" alt="FR_OS Community Edition logo" width="520">
+    <img src="docs/media/FROSCOM.svg" alt="FR_OS Community Edition logo" width="560">
   </picture>
 </p>
 
-<p align="center"><strong>Turn a spare PC into a Linux firewall that can explain what it sees.</strong></p>
+<h1 align="center">FR_OS Community Edition</h1>
+<h3 align="center">Your network has a story. See it. Understand it. Take control.</h3>
 
 <p align="center">
-  Segment your network, connect with WireGuard, and investigate suspicious
-  devices from a local dashboard. AI Perimeter explains the evidence and
-  drafts firewall changes for you to review.
+  A camera reaching an unfamiliar server. A laptop contacting an AI service.<br>
+  A firewall rule you need to change without losing access.<br><br>
+  <strong>Bring the traffic, the evidence and the next decision into one local dashboard.</strong>
 </p>
 
-<p align="center"><strong>Built in Go and Rust · Go uses <code>encoding/json/v2</code></strong></p>
+<p align="center">
+  Open-source Linux firewall &amp; router · Local AI Perimeter · Your hardware, your control
+</p>
+
+<p align="center"><strong>Built in Rust &amp; Go · Go JSON powered by <code>encoding/json/v2</code></strong></p>
 
 <p align="center">
-  <a href="#100-local"><img src="https://img.shields.io/badge/100%25%20Local-cloud%20optional-198754" alt="100% Local with an optional cloud model"></a>
-  <a href="go.mod"><img src="https://img.shields.io/badge/Go-control%20plane-00ADD8?logo=go&amp;logoColor=white" alt="Go control plane"></a>
+  <a href="#100-local"><img src="https://img.shields.io/badge/100%25%20Local-no%20cloud%20required-198754" alt="100% Local — no cloud required"></a>
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-traffic%20analysis-CE422B?logo=rust&amp;logoColor=white" alt="Rust traffic analysis"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-AGPL--3.0--only-4C76C4" alt="AGPL-3.0-only"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-JSON%20v2-00ADD8?logo=go&amp;logoColor=white" alt="Go with encoding/json/v2"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Open%20source-AGPLv3-875AF5" alt="Open source under AGPL-3.0-only"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/starsmash29/FR_OS-Community/releases"><strong>Download</strong></a>
-  · <a href="#installation--deployment">Quick start</a>
-  · <a href="#ai-perimeter">AI Perimeter</a>
-  · <a href="#system-architecture">Architecture</a>
-  · <a href="#contributing">Contributing</a>
+  <a href="#installation--deployment"><strong>Start your first deployment</strong></a>
+  · <a href="https://youtu.be/4aiUjXjpO1M"><strong>Watch AI Perimeter</strong></a>
+  · <a href="#how-fros-compares"><strong>Compare platforms</strong></a>
+  · <a href="#system-architecture"><strong>Explore the architecture</strong></a>
 </p>
 
-<p align="center">
-  <img src="docs/media/network-flow.svg" alt="Animated network diagram showing traffic through the Linux firewall and a separate AI Perimeter review path" width="980">
-</p>
+---
 
-FR_OS Community Edition is a Debian-based firewall and router OS for x86-64
-homelabs. It combines the original FR_OS firewall, the AI Perimeter assistant,
-and the hackathon work in one product.
+## A firewall you can investigate. A network you can understand.
 
-### 100% Local
+Your router sits at the crossing point of your digital life. Work laptops,
+phones, cameras, game consoles and a growing collection of connected devices
+all pass through it. FR_OS Community Edition puts that vantage point to work.
 
-The firewall, dashboard, traffic analysis and configuration
-work without a cloud account or vendor telemetry. AI Perimeter can use a model
-on your own hardware. Connecting a cloud model is optional and sends the
-selected request and its redacted context to that provider. Prometheus
-monitoring is a separate, opt-in pull endpoint that you control.
+**See which devices are talking. Investigate what changed. Decide what happens next.**
+
+Run a Debian-based firewall and router on your own x86-64 hardware or in a VM.
+Separate trusted devices from IoT, connect through WireGuard, schedule access
+and inspect local DNS, application and TLS signals. When something looks
+wrong, AI Perimeter helps turn the observations into an explanation you can
+check and a configuration proposal you can review.
+
+The FR_OS firewall, AI Perimeter and the hackathon work come together as
+**one Community Edition**, with a **Rust and Go implementation**. Go handles
+configuration and orchestration with `encoding/json/v2`; Rust handles
+traffic-facing analysis and eBPF/XDP components.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🔎 See the activity</h3>
+      <p>Discover devices, inspect reachable services and connect DNS, application and TLS observations to the device behind them.</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>🧠 Understand the evidence</h3>
+      <p>Ask why a device was flagged. AI Perimeter builds its explanation from local observations you can inspect.</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>🛡️ Control the response</h3>
+      <p>Isolate a device, restrict an application or review a proposed rule. Apply changes with confirmation and rollback.</p>
+    </td>
+  </tr>
+</table>
+
+## 100% Local
+
+### Your network should work without asking a cloud for permission.
+
+The firewall, WebUI, traffic analysis and configuration work locally,
+**without a vendor account or vendor telemetry**. Run the AI model on the
+router or on another machine you control. Your own Prometheus and Grafana
+can provide monitoring.
+
+Cloud inference is an explicit option. Enabling a cloud model sends selected
+requests and redacted context to that provider; context can still include
+device and rule details. The default local workflow needs no cloud model.
 
 ## 🌟 Core pillars
 
-| Pillar | What it lets you do |
+| What you want | What FR_OS puts in your hands |
 | --- | --- |
-| **Linux-native firewall** | Enforce stateful rules and zone boundaries with nftables. Filter by visible TLS server names with eBPF/XDP, without decrypting traffic. |
-| **WireGuard and local access control** | Give each remote device its own WireGuard peer. Require a local sign-in for protected zones, with session expiry enforced in the kernel. |
-| **Network visibility** | Inspect which services are reachable from each zone, discover IoT devices, and see applications inferred from DNS and TLS names. |
-| **Local detection and response** | Use DNS category lists, TLS fingerprints and per-device traffic baselines to identify unwanted activity. Quarantine flagged devices through the firewall. |
-| **AI Perimeter** | Ask why a device was flagged or describe a rule in plain language. Inspect the evidence and configuration diff before applying changes. |
-| **Operator controls** | Use admin and read-only accounts, passkeys or TOTP, local audit records, and confirmed apply with rollback. |
+| **Keep your networks apart** | Stateful nftables policy and zone boundaries for trusted clients, guests and IoT. eBPF/XDP adds early filtering using observable traffic signals. |
+| **Reach home securely** | WireGuard peers for individual devices, with local sign-in and expiring access sessions for protected zones. |
+| **Find the device behind the activity** | Device discovery, an attack-surface view and application attribution from observable DNS and TLS names. |
+| **Catch changes in behaviour** | Per-device baselines, DNS categories and TLS fingerprints help surface suspicious activity. nftables provides quarantine enforcement. |
+| **Turn intent into a reviewed rule** | AI Perimeter translates supported plain-language requests into validated configuration proposals with an inspectable diff. |
+| **Stay in control of changes** | Administrator and viewer roles, passkeys or TOTP, and apply confirmation with rollback keep the operator in the loop. |
+
+## Put it to work
+
+| Situation | Your next move |
+| --- | --- |
+| **“This camera should never reach my work laptop.”** | Put IoT in a separate zone, review its reachability and apply the policy you intend. |
+| **“Why did this device suddenly get flagged?”** | Inspect the local detection signals, then ask AI Perimeter to explain the evidence. |
+| **“Which devices appear to use AI services?”** | Review Shadow AI observations and their DNS or application attribution. |
+| **“The tablet needs a bedtime, not a permanent block.”** | Schedule access by day and time, with optional termination of existing connections when the block begins. |
+| **“I need remote access to my lab.”** | Create a WireGuard peer and limit the zones and services it may reach. |
+| **“I need to change a rule without locking myself out.”** | Inspect the diff, apply the change and confirm connectivity. An unconfirmed apply rolls back. |
 
 ## AI Perimeter
 
-Ask **“Why was this laptop flagged?”** or **“Keep the kids’ tablet offline
-after 10 p.m. on school nights.”** AI Perimeter can explain what the sensors
-observed or turn your request into a proposed configuration change.
+### Ask a question. Inspect the evidence. Approve the change.
 
-| Workflow | What happens |
+A detection deserves an explanation. A proposed firewall rule deserves a
+review. AI Perimeter connects those two workflows to the network information
+already available on your router.
+
+> **“Why was this laptop flagged?”**  
+> Investigate a pseudonymised evidence bundle drawn from local IDS, DNS,
+> App-ID, JA4 and XDP observations.
+>
+> **“Keep the kids’ tablet offline after 10 p.m. on school nights.”**  
+> Turn a supported request into a structured proposal, inspect the validated
+> configuration diff and decide whether to save and apply it.
+
+These are example requests, not captured model responses.
+
+| From question to decision | What you can inspect |
 | --- | --- |
-| **Explain an incident** | The assistant uses a pseudonymised evidence bundle from local IDS, DNS, App-ID, JA4 and XDP signals. The explanation cites individual observations that you can inspect. |
-| **Review Shadow AI use** | See which devices appear to contact AI services. Optional upload accounting estimates transfer volumes from sampled connections and DNS attribution. Short-lived flows can be missed. |
-| **Propose a change** | The assistant produces a structured proposal for supported changes to firewall rules, app controls, ZTNA or WireGuard peers. The config validator, policy checks and rule linter run before you see the diff. |
-| **Save, apply and confirm** | An administrator reviews and saves the proposal, then applies it through the firewall. Confirm the apply after checking connectivity. The firewall rolls back an unconfirmed change. |
-
-The assistant runs without access to the privileged apply socket. It receives a
-redacted configuration summary for proposals and a separate pseudonymised
-bundle for explanations. Passwords, API tokens and WireGuard private keys are
-excluded. Proposal context can still include device and rule details.
+| **Explain an incident** | An explanation that cites individual observations from the local evidence bundle. |
+| **Investigate Shadow AI** | Devices that appear to contact AI services. Optional upload accounting estimates volumes from sampled connections and DNS attribution; short-lived flows can be missed. |
+| **Draft a supported change** | Proposals for firewall rules, application controls, ZTNA or WireGuard peers, checked by configuration validation, policy checks and a rule linter. |
+| **Review and save** | The proposed diff before an administrator saves the configuration. |
+| **Apply and confirm** | A separate apply step, followed by connectivity confirmation or rollback. |
 
 ```mermaid
 flowchart LR
-    A["Intent or sensor event"] --> B["AI Perimeter"]
-    B --> C["Explanation with evidence"]
-    B --> D["Validated proposal and diff"]
-    D --> E["Administrator saves and applies"]
-    E --> F["Confirm or roll back"]
+    A["💬 Your request"] --> B["🧠 AI Perimeter"]
+    B --> C["🔍 Validate & inspect diff"]
+    C --> D["👤 Administrator approval"]
+    D --> E["🛡️ Apply & confirm"]
+    E --> F["Keep change or roll back"]
+    G["📡 Local sensor evidence"] --> B
+    B --> H["📋 Explanation with evidence"]
 ```
 
-**See the workflow in action.** The original AI Perimeter demo shows an
-incident on real router hardware using a simulated attack scenario.
-[Watch the 2:40 demo](https://youtu.be/4aiUjXjpO1M)
+**You retain the authority to change the firewall.** The assistant cannot
+access the privileged apply socket. Proposal context excludes passwords,
+API tokens and WireGuard private keys. Explanations use a separate
+pseudonymised evidence bundle.
+
+**Watch it on real router hardware.** The original AI Perimeter demo walks
+through a simulated attack and the investigation that follows.
+[▶ Watch the 2:40 demo](https://youtu.be/4aiUjXjpO1M)
 
 ## System architecture
+
+### Rust at the traffic boundary. Go at the controls. Linux on the packet path.
+
+<p align="center">
+  <img src="docs/media/network-flow.svg" alt="Animated architecture diagram separating the Linux packet path from AI evidence and administrator-approved changes" width="980">
+</p>
+
+Traffic enforcement, analysis and administration have distinct jobs. The
+architecture keeps those jobs in separate processes with explicit permission
+boundaries, so a dashboard request goes through validation before it can
+change router state.
 
 - **Go control plane.** The local WebUI, configuration validation, ruleset
   generation and apply orchestration run separately from the packet path.
@@ -109,6 +183,12 @@ Rust side uses Serde. Both implementations are checked against the same
 [Architecture and source layout](AGENTS.md#which-language-does-what)
 
 ## Installation & deployment
+
+### Start with one router and one test client.
+
+Give FR_OS a place between an upstream connection and an isolated test
+network. Your first goal is simple: open the dashboard, connect a client,
+and see its traffic before building out your policies.
 
 1. Download the amd64 installer image from [Releases](https://github.com/starsmash29/FR_OS-Community/releases).
    Verify it using the checksum and signing instructions for that release.
@@ -141,58 +221,97 @@ performance. Native XDP availability depends on the network driver.
 
 ## WebUI
 
-Use the local browser dashboard to manage interfaces, firewall rules, NAT,
-DNS and WireGuard. The attack-surface view shows listening services and the
-zones that can reach them. Separate admin and viewer roles let others inspect
-the network while keeping configuration changes with administrators. Sign-in
-supports WebAuthn security keys or passkeys and TOTP.
+### The place where observations become decisions.
+
+Open the local dashboard to manage interfaces, firewall rules, NAT, DNS and
+WireGuard. Move from a device or a listening service to the network policy
+that governs it, with an attack-surface view showing which zones can reach
+which services.
+
+Use a **viewer account** to share visibility and an **administrator account**
+to change configuration. WebAuthn security keys or passkeys and TOTP support
+local sign-in. Review changes before applying them, then confirm that the
+network still behaves as intended.
 
 ## IoT devices
 
-Build a local inventory using DHCP leases, neighbour discovery and mDNS.
-Review the signals behind each classification, then choose internet-only
-isolation or a full block for the device. You can review the inventory before
-enabling automatic isolation.
+### Give every connected device a place — and a boundary.
+
+Cameras, speakers and smart plugs need connectivity. The local inventory
+combines DHCP leases, neighbour discovery and mDNS to help you identify
+them and inspect the signals behind their classification.
+
+Choose **internet-only isolation** or a **full block** for a device. Review
+the inventory before enabling automatic isolation, so the policy follows
+what you actually know about your network.
 
 ## Applications
 
-See which applications devices appear to use based on local DNS queries and,
-when enabled, visible TLS server names. Apply app blocks in the resolver and
-optionally on the XDP path. Attribution depends on the names the router can
-observe.
+### Manage what a device connects to, beyond an IP address.
+
+Inspect application activity inferred from local DNS queries and, when
+enabled, visible TLS server names. Apply application blocks through the
+resolver and optionally the XDP path.
+
+This is useful for spotting unwanted services and keeping access aligned
+with a device's purpose. Attribution depends on names the router can
+observe; it does not reveal encrypted application payloads.
 
 ## Time-based rules
 
-Apply a rule on specific days and at specific times in the router's configured
-time zone. For example, block internet access for a tablet on school nights
-while leaving daytime access available. Rules can optionally cut established
-connections when a scheduled block begins.
+### Let the policy follow the clock.
+
+Give a tablet access during the day and block it on school nights. Define
+the days and time windows in the router's configured time zone, then let
+the schedule enforce the rule.
+
+When a block begins, optionally terminate established connections so an
+already-open session does not outlive the access window.
 
 ## TLS fingerprints
 
-JA4 and JA3 describe characteristics of the TLS ClientHello. FR_OS uses them
-to show which TLS clients it observes per device, flag unfamiliar
-fingerprints and enforce configured blocklists. Fingerprints are one signal
-alongside DNS, app and connection activity.
+### A destination tells you where. A fingerprint adds a clue about what.
+
+JA4 and JA3 describe characteristics of a TLS ClientHello. Use the observed
+fingerprints to investigate TLS clients per device, notice unfamiliar
+patterns and enforce configured fingerprint blocklists.
+
+Read fingerprints alongside DNS, application and connection activity.
+They are investigative signals, not proof of a device's identity or intent.
 
 ## AI IDS/IPS
 
-The on-router detector compares a device's recent connection rate,
-destination diversity and available DNS or TLS signals against its own
-baseline. It can quarantine devices with nftables. The detector raises the
-signal locally, and AI Perimeter can explain the evidence behind it when
-requested.
+### Notice when a device stops behaving like itself.
+
+The on-router detector compares recent connection rates, destination
+diversity and available DNS or TLS signals against a device's own baseline.
+That gives you a way to investigate changes in activity alongside
+configured categories and blocklists.
+
+The detector can quarantine devices through nftables. AI Perimeter adds
+an explanation of the underlying evidence when requested. **Detection
+happens locally; an LLM is not required to make the detector run.**
 
 ## Telemetry & Grafana
 
-Enable the token-protected Prometheus endpoint if you want to monitor one
-router or a fleet. Your own Prometheus server pulls the metrics. Use Grafana
-to track interface throughput, CPU and memory, active VPN or access sessions
-where reported, DNS and XDP block counters, and device quarantines. For
-multi-site monitoring, scrape over verified TLS and keep the endpoint
-restricted to your monitoring network.
+### Your metrics. Your dashboards. Your monitoring server.
+
+Track throughput, resource use, DNS and XDP block counters, device
+quarantines and reported VPN or access sessions in your own Grafana
+dashboards.
+
+Enable the token-protected Prometheus endpoint, then let your Prometheus
+server pull the metrics. This is opt-in operator monitoring, separate from
+vendor telemetry. For multiple sites, use verified TLS and restrict the
+endpoint to your monitoring network.
 
 ## Testing
+
+### The rewrite has to earn its compatibility.
+
+Rust and Go share protocol test vectors, and the ruleset implementation is
+checked against captured reference behaviour. The test suites give
+contributors a way to check changes against those expectations.
 
 Run the Go and Rust suites on Linux with the pinned [Go](go.mod) and
 [Rust](rust-toolchain.toml) toolchains.
@@ -216,6 +335,13 @@ requests and prompt-injection cases.
 
 ## How FR_OS compares
 
+### Choose the firewall that fits the way you want to run your network.
+
+FR_OS brings together an open-source Linux router, local traffic analysis
+and an AI-assisted investigation and policy workflow. Its distinctive
+combination is **your hardware, local processing, inspectable source and
+administrator-approved AI proposals**.
+
 | Platform | Deployment focus | Traffic visibility and enforcement | Management workflow |
 | --- | --- | --- | --- |
 | **FR_OS Community Edition** | Debian-based x86-64 homelab router on your own hardware or VM | nftables and eBPF/XDP. Local DNS, TLS metadata and behavioural signals feed detection. | Local WebUI. AI Perimeter cites evidence and proposes changes for an administrator to approve. |
@@ -233,6 +359,13 @@ support requirements separately.
 
 ## Contributing
 
+### Help make the next network easier to understand.
+
+A reproducible bug report, a clearer explanation or a well-tested fix can
+help the next operator. If FR_OS fits your lab, **star the repository** to
+keep it on your radar and share the project with someone building their
+own network.
+
 Start with [AGENTS.md](AGENTS.md) for the repository layout, current
 contribution status and checks. For a bug report, include the release,
 hardware or VM setup and steps to reproduce. Remove credentials and private
@@ -245,3 +378,12 @@ Report vulnerabilities privately through GitHub using the
 
 [GNU AGPLv3](LICENSE) (`AGPL-3.0-only`). See [LEGAL.md](LEGAL.md) for
 trademark and third-party notices.
+
+---
+
+<p align="center"><strong>See the activity. Understand the evidence. Control your network.</strong></p>
+<p align="center">
+  <a href="#installation--deployment">Start with FR_OS</a> ·
+  <a href="https://youtu.be/4aiUjXjpO1M">Watch AI Perimeter</a> ·
+  <a href="#contributing">Get involved</a>
+</p>
