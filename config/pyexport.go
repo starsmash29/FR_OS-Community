@@ -188,3 +188,14 @@ func PySplitlines(s string) []string {
 	}
 	return lines
 }
+
+// FloatRepr is repr(f) of a float (also its str).
+func FloatRepr(f float64) string { return floatRepr(f) }
+
+// CheckHostname is frfw.validate.hostname: an RFC 1123 host name.
+func CheckHostname(s string) error {
+	if msg := validateHostname(s); msg != "" {
+		return &Error{msg}
+	}
+	return nil
+}

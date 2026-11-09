@@ -1,0 +1,84 @@
+{{define "title"}}Second factor - FR_OS{{end}}
+{{define "content"}}
+<h1>Second factor</h1>
+<p class="muted">With a second factor, a stolen password alone no longer signs anyone in as
+  <strong>{{.Username}}</strong>. Adding or removing one always asks for the current password.</p>
+{{if .Data.Required}}
+<div class="flash-error">Admins must use a second factor on this router: add one below to continue.</div>
+{{end}}
+
+<div class="card allow-viewer">
+  <h3>Security keys and passkeys</h3>
+  <p class="muted">Phishing-resistant (FIDO2 / WebAuthn): the recommended factor. A key is bound to the name the
+    router was opened by{{if .Data.RPID}} -- here <code>{{.Data.RPID}}</code>{{end}}.</p>
+  {{if .Data.Keys}}
+  <table>
+    <tr><th>Name</th><th>Works on</th><th>Remove</th></tr>
+    {{range .Data.Keys}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td><code>{{.RPID}}</code></td>
+      <td>
+        <form class="inline allow-viewer" method="post" action="/account/mfa/remove">
+          {{$.CSRFInput}}
+          <input type="hidden" name="kind" value="webauthn">
+          <input type="hidden" name="key_id" value="{{.ID}}">
+          <input type="password" name="password" required placeholder="Current password"
+                 aria-label="Current password" style="width:10rem;display:inline-block;">
+          <button type="submit" class="danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+  {{if .Data.RPID}}
+  <div class="flash-error" id="webauthn-error" hidden></div>
+  <form id="webauthn-register" class="allow-viewer">
+    <label>Name for the key</label>
+    <input type="text" name="name" maxlength="40" placeholder="e.g. YubiKey on keyring">
+    <label>Current password</label>
+    <input type="password" name="password" required autocomplete="current-password">
+    <button type="submit">Add security key</button>
+  </form>
+  {{else}}
+  <p class="muted">Browsers only allow security keys on a name, not an IP address: open the router by its host
+    name (for example https://{{.Hostname}}.lan/, with a certificate for that name) to add one.
+    The authenticator app works either way.</p>
+  {{end}}
+</div>
+
+<div class="card allow-viewer">
+  <h3>Authenticator app</h3>
+  {{with .Data.NewTOTP}}
+  <p class="muted">Scan the code with an authenticator app (or type the key in), then enter the 6-digit code it
+    shows. The key is shown only now.</p>
+  <div style="background:#fff;display:inline-block;padding:8px;border-radius:6px;">{{.QR}}</div>
+  <p>Key: <code>{{.Secret}}</code></p>
+  <form method="post" action="/account/mfa/totp" class="allow-viewer">
+    {{$.CSRFInput}}
+    <input type="hidden" name="tid" value="{{.TID}}">
+    <label>6-digit code</label>
+    <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}"
+           maxlength="7" required>
+    <label>Current password</label>
+    <input type="password" name="password" required autocomplete="current-password">
+    <button type="submit">Turn on</button>
+  </form>
+  {{else}}{{if .Data.TOTP}}
+  <p><span class="badge badge-green">on</span> Codes from an authenticator app are accepted.</p>
+  <form method="post" action="/account/mfa/remove" class="allow-viewer">
+    {{.CSRFInput}}
+    <input type="hidden" name="kind" value="totp">
+    <label>Current password</label>
+    <input type="password" name="password" required autocomplete="current-password">
+    <button type="submit" class="danger">Remove authenticator app</button>
+  </form>
+  {{else}}
+  <p class="muted">Time-based codes (TOTP) from any authenticator app. Works on every address, but unlike a
+    security key a code can be phished.</p>
+  <form method="get" action="/account/mfa/totp" class="allow-viewer"><button type="submit">Set up authenticator app</button></form>
+  {{end}}{{end}}
+</div>
+{{if .Data.RPID}}<script src="/static/webauthn.js?v={{.Version}}"></script>{{end}}
+{{end}}

@@ -31,13 +31,13 @@ out="$work/out"
 		python3 -m pytest -p fros_capture tests "$root/reference/test_fros_edge_cases.py" \
 			"$root/reference/test_fros_yaml_cases.py" "$root/reference/test_fros_helper_cases.py" \
 			"$root/reference/test_fros_ruleset_cases.py" "$root/reference/test_fros_render_cases.py" \
-			"$root/reference/test_fros_apply_cases.py" \
+			"$root/reference/test_fros_apply_cases.py" "$root/reference/test_fros_webui_cases.py" \
 			--ignore=tests/webui -q -p no:cacheprovider >"$work/pytest.log" 2>&1 || true
 )
 [ -s "$out/summary.json" ] || { tail -20 "$work/pytest.log" >&2; exit 1; }
 mkdir -p testdata/reference
 cp "$out/config.jsonl" "$out/ruleset.jsonl" "$out/yaml.jsonl" "$out/yaml_config.jsonl" "$out/helper.jsonl" \
-	"$out/render.jsonl" "$out/apply.jsonl" "$out/summary.json" \
+	"$out/render.jsonl" "$out/apply.jsonl" "$out/webui.jsonl" "$out/summary.json" \
 	testdata/reference/
 echo "$pin" >testdata/reference/PIN
 cat testdata/reference/summary.json

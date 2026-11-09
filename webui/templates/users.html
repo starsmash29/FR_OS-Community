@@ -1,0 +1,105 @@
+{{define "title"}}Users - FR_OS{{end}}
+{{define "content"}}
+<h1>Users</h1>
+<p class="muted">
+  <strong>admin</strong>: everything, including this page.
+  <strong>viewer</strong>: every screen read-only, can change only its own password.
+  At least one admin always remains. Changing a password or role, or deleting an
+  account, ends its open sessions immediately.
+</p>
+
+<div class="card">
+  <h3>Accounts</h3>
+  <table>
+    <tr><th>User</th><th>Role</th><th>Second factor</th><th>Change role</th><th>Reset password</th><th></th></tr>
+    {{range .Data.Users}}
+    <tr>
+      <td>{{.Username}}{{if eq .Username $.Username}} <span class="muted">(you)</span>{{end}}</td>
+      <td>{{if .IsAdmin}}<span class="badge badge-yellow">admin</span>{{else}}<span class="badge">viewer</span>{{end}}</td>
+      <td>
+        {{if .HasMFA}}
+        <span class="badge badge-green">on</span>
+        <form class="inline" method="post" action="/users/{{.Username}}/mfa-reset" data-confirm="Remove every second factor of {{.Username}} and end their sessions?">
+          {{$.CSRFInput}}
+          <button type="submit" class="secondary">Reset</button>
+        </form>
+        {{else}}<span class="badge">off</span>{{end}}
+      </td>
+      <td>
+        <form class="inline" method="post" action="/users/{{.Username}}/role">
+          {{$.CSRFInput}}
+          <select name="role" aria-label="Role of {{.Username}}">
+            {{$role := .Role}}{{range $.Data.Roles}}<option value="{{.}}" {{if eq . $role}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
+          <button type="submit" class="secondary">Set</button>
+        </form>
+      </td>
+      <td>
+        <form class="inline" method="post" action="/users/{{.Username}}/password">
+          {{$.CSRFInput}}
+          <input type="password" name="new_password" minlength="{{$.MinPassword}}" required aria-label="New password for {{.Username}}" style="width:10rem;display:inline-block;">
+          <button type="submit" class="secondary">Reset</button>
+        </form>
+      </td>
+      <td>
+        <form class="inline" method="post" action="/users/{{.Username}}/delete" data-confirm="Delete user {{.Username}}?">
+          {{$.CSRFInput}}
+          <button type="submit" class="danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+
+<div class="card">
+  <h3>Second-factor policy</h3>
+  <p class="muted">When required, an admin without a security key or authenticator app can do nothing but add one
+    after signing in. Reset a lost factor above (or with <code>firewall-cli mfa-reset USER</code> on the console).</p>
+  <form method="post" action="/users/mfa-policy">
+    {{.CSRFInput}}
+    <label><input type="checkbox" name="require" value="true" {{if .Data.RequireMFA}}checked{{end}}> Require a second factor for admins</label>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Add user</h3>
+  <form method="post" action="/users/add">
+    {{.CSRFInput}}
+    <label>Username</label>
+    <input type="text" name="new_username" pattern="[a-z_][a-z0-9_.\-]{0,31}" required>
+    <label>Password (at least {{.MinPassword}} characters)</label>
+    <input type="password" name="new_password" minlength="{{.MinPassword}}" required>
+    <label>Role</label>
+    <select name="role">
+      <option value="viewer">viewer (read-only)</option>
+      <option value="admin">admin</option>
+    </select>
+    <button type="submit">Add user</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Audit log (latest 200)</h3>
+  <p class="muted">Every change request and login: who, when, from where, which endpoint and the outcome. Form contents are never recorded.</p>
+  {{if not .Data.Audit}}
+  <p class="muted">Nothing recorded yet.</p>
+  {{else}}
+  <div class="scroll-table" style="max-height:480px;">
+  <table>
+    <tr><th>When</th><th>User</th><th>From</th><th>What</th><th>Result</th></tr>
+    {{range .Data.Audit}}
+    <tr>
+      <td>{{.When}}</td>
+      <td>{{.User}}{{if .Role}} <span class="muted">({{.Role}})</span>{{end}}</td>
+      <td>{{.Client}}</td>
+      <td>{{if .Alert}}<span class="badge badge-red">alert</span> {{.Alert}}{{else if .Event}}{{.Event}}{{else}}<code>{{.Method}} {{.Path}}</code>{{end}}</td>
+      <td>{{if .Status}}{{if .Denied}}<span class="badge badge-red">denied</span>{{else if .OK}}{{.Status}}{{else}}<span class="badge badge-red">{{.Status}}</span>{{end}}{{else}}-{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+  {{end}}
+</div>
+{{end}}

@@ -1,0 +1,38 @@
+{{define "title"}}Account - FR_OS{{end}}
+{{define "content"}}
+<h1>Account</h1>
+<p>Signed in as <strong>{{.Username}}</strong> ({{.Data.Role}}).</p>
+<div class="card allow-viewer">
+  <h3>Change password</h3>
+  <p class="muted">Every session of this account ends when the password changes (this browser stays signed in).</p>
+  <form method="post" action="/account/password" class="allow-viewer">
+    {{.CSRFInput}}
+    <label>Current password</label>
+    <input type="password" name="current_password" required>
+    <label>New password (at least {{.MinPassword}} characters)</label>
+    <input type="password" name="new_password" minlength="{{.MinPassword}}" required>
+    <label>Confirm new password</label>
+    <input type="password" name="new_password_confirm" minlength="{{.MinPassword}}" required>
+    <button type="submit">Change password</button>
+  </form>
+</div>
+<div class="card allow-viewer">
+  <h3>Second factor</h3>
+  {{if .Data.HasMFA}}
+  <p><span class="badge badge-green">on</span> Signing in needs a security key or an authenticator-app code
+    as well as the password.</p>
+  {{else}}
+  <p class="muted">Off: the password alone signs this account in. Add a security key or an authenticator app.</p>
+  {{end}}
+  <form method="get" action="/account/mfa" class="allow-viewer"><button type="submit" class="secondary">Manage second factor</button></form>
+</div>
+<div class="card allow-viewer">
+  <h3>Sessions</h3>
+  <p class="muted">End every session of this account, on every device -- this one too. Use it after signing in
+    on a shared computer or if a device went missing.</p>
+  <form method="post" action="/account/logout-everywhere" class="allow-viewer">
+    {{.CSRFInput}}
+    <button type="submit" class="danger">Log out everywhere</button>
+  </form>
+</div>
+{{end}}

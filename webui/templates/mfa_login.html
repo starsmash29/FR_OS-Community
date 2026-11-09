@@ -1,0 +1,38 @@
+{{define "title"}}Second factor - FR_OS{{end}}
+{{define "page"}}
+<main class="auth-page">
+  <div class="auth-shell">
+{{template "auth_brand" .}}
+      <dl class="auth-facts">
+        <div><dt>Router</dt><dd>{{.Hostname}}</dd></div>
+        <div><dt>Step</dt><dd>second factor</dd></div>
+        <div><dt>Time left</dt><dd>5 minutes, 5 tries</dd></div>
+      </dl>
+    </section>
+
+    <section class="auth-card">
+      <h2>Second factor</h2>
+      <p class="muted">The password was right. Confirm it's you with your second factor.</p>
+      {{if .Error}}<div class="flash-error">{{.Error}}</div>{{end}}
+      {{if .Data.Keys}}
+      <div class="flash-error" id="webauthn-error" hidden></div>
+      <button type="button" id="webauthn-signin"><svg class="icon icon-sm"><use href="/static/icons.svg#lock"/></svg>Use security key</button>
+      {{else if .Data.KeysElsewhere}}
+      <p class="muted">This account's security keys work only when the router is opened by the name they were added
+        on (not by IP address).{{if .Data.TOTP}} Use the authenticator app below instead.{{end}}</p>
+      {{end}}
+      {{if .Data.TOTP}}
+      <form method="post" action="/login/mfa/totp">
+        <label for="code">Code from the authenticator app</label>
+        <input type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code"
+               pattern="[0-9 ]{6,7}" maxlength="7" {{if not .Data.Keys}}autofocus{{end}} required>
+        <button type="submit" class="{{if .Data.Keys}}secondary{{end}}">Verify code</button>
+      </form>
+      {{end}}
+      <div class="auth-foot">Lost your second factor? Another admin can reset it on the Users screen, or run
+        <code>firewall-cli mfa-reset USER</code> on the router's console.</div>
+    </section>
+  </div>
+</main>
+{{if .Data.Keys}}<script src="/static/webauthn.js?v={{.Version}}"></script>{{end}}
+{{end}}
