@@ -74,7 +74,8 @@ func New(env Env, version, codename string) (*Server, error) {
 	s.guard = newBruteforceGuard(env, env.Paths.LoginGuard(), deviceLookup(s.helper))
 	s.pages = map[string]*template.Template{}
 	base := template.Must(template.New("").ParseFS(templateFS, "templates/base.html", "templates/auth_head.html"))
-	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login", "dashboard"} {
+	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login", "dashboard",
+		"rules", "nat", "interfaces", "dhcp", "segments"} {
 		t := template.Must(template.Must(base.Clone()).ParseFS(templateFS, "templates/"+name+".html"))
 		s.pages[name] = t
 	}
@@ -290,13 +291,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseQuery(raw string) (form, error) {
-	f := form{values: map[string]string{}, has: true}
+	f := form{values: map[string]string{}, all: map[string][]string{}, has: true}
 	for _, part := range strings.Split(raw, "&") {
 		if part == "" {
 			continue
 		}
 		name, value, _ := strings.Cut(part, "=")
-		f.values[pyUnquotePlus([]byte(name))] = pyUnquotePlus([]byte(value))
+		f.add(pyUnquotePlus([]byte(name)), pyUnquotePlus([]byte(value)))
 	}
 	return f, nil
 }

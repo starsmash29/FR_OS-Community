@@ -64,6 +64,24 @@ func (m *Map) Get(key string) (Value, bool) {
 	return nil, false
 }
 
+// Delete is `m.pop(key, None)` for a string key: whether it was there.
+// A key set again later goes to the end, as in a Python dict.
+func (m *Map) Delete(key string) bool {
+	i, ok := m.index["s"+key]
+	if !ok {
+		return false
+	}
+	m.keys = append(m.keys[:i:i], m.keys[i+1:]...)
+	m.vals = append(m.vals[:i:i], m.vals[i+1:]...)
+	delete(m.index, "s"+key)
+	for k, j := range m.index {
+		if j > i {
+			m.index[k] = j - 1
+		}
+	}
+	return true
+}
+
 // Has is `key in m`.
 func (m *Map) Has(key string) bool { _, ok := m.index["s"+key]; return ok }
 

@@ -1,0 +1,39 @@
+{{define "title"}}Segments - FR_OS{{end}}
+{{define "content"}}
+<h1>Network segments</h1>
+{{if .Data.FirstRun}}<div class="notice">Your account is set up. One more recommended step: keep smart devices and guests
+  off your own network.</div>{{end}}
+<p class="muted">
+  On one flat network, a hacked camera or a guest's infected laptop can reach every other device. A segment is a
+  separate network with its own addresses and DHCP that can reach the internet and nothing else. Each one here is a
+  VLAN on the LAN port (<code>{{or .Data.Parent "?"}}</code>): set your access point to put the IoT and guest Wi-Fi on these
+  VLAN IDs (or use a VLAN-capable switch).
+</p>
+<div class="card">
+  <form method="post" action="/segments">
+    {{.CSRFInput}}
+    <table>
+      <tr><th></th><th>Segment</th><th>VLAN</th><th>Network</th><th>Device</th><th></th></tr>
+      {{range .Data.Segments}}
+      <tr>
+        <td>{{if not .Present}}<input type="checkbox" name="segment" value="{{.Name}}" checked style="width:auto;">{{end}}</td>
+        <td>{{.Label}} (<code>{{.Name}}</code>)</td>
+        <td>{{.VLAN}}</td>
+        <td>{{.Address}}</td>
+        <td><code>{{or .Device "-"}}</code></td>
+        <td>{{if .Present}}<span class="badge badge-green">set up</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </table>
+    <p class="muted">Each gets DHCP (.100-.199, public DNS), a rule to the internet and nothing towards your LAN or this
+      router's management. IoT devices are also inventoried and isolated (see <a href="/iot">IoT Devices</a>).</p>
+    <button type="submit">Add the ticked segments</button>
+  </form>
+  {{if .Data.FirstRun}}
+  <form method="post" action="/segments">
+    {{.CSRFInput}}
+    <button type="submit" class="secondary">Skip for now</button>
+  </form>
+  {{end}}
+</div>
+{{end}}

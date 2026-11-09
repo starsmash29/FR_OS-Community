@@ -191,3 +191,7 @@ func (h helper) SourceDevice(ip string) (*config.Map, error) {
 func (h helper) AuditAppend(entry *config.Map) (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "audit_append", "entry", entry), 10)
 }
+func (h helper) SaveConfig(yamlText string) (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "save_config", "yaml", yamlText), 10)
+}
+func (h helper) IPv6Status() (*config.Map, error) { return h.apply(cmdMap("cmd", "ipv6_status"), 10) }
