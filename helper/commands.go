@@ -79,6 +79,10 @@ func (s *Server) dispatch(cmd config.Value, request *config.Map) (any, error) {
 		return s.cmdAuditAppend(request)
 	case "save_config":
 		return s.cmdSaveConfig(request)
+	case "set_management_addresses":
+		return s.cmdSetManagementAddresses(request)
+	case "refresh_adblock":
+		return s.cmdRefreshAdblock()
 	}
 	if slices.Contains(Commands, name) {
 		return message(false, fmt.Sprintf("command %s is not in FR_OS 2 yet", config.Repr(cmd))), nil

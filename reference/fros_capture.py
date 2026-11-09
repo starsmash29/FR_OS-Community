@@ -9,7 +9,8 @@ reference/PIN, over its own test suite:
 Every call of `parse_config` (the schema check) and `build_ruleset`
 (the nft script) made anywhere in the suite is written down: the raw
 input, and the result or the error. So is every `yaml.safe_load` of a
-text (yaml.jsonl: the text and the value PyYAML built, or its error),
+text (yaml.jsonl: the text and the value PyYAML built, or its error,
+and what yaml.safe_dump writes for that value),
 and every `parse_config` of a value that came straight from one
 (yaml_config.jsonl: the text and parse_config's answer), since a YAML
 value can be what JSON can't carry (a date, a key that isn't a
@@ -155,10 +156,16 @@ def _patch():
         except Exception as exc:  # 1.x crashes: not a YAMLError
             _record("yaml", {"input": stream, "ok": False, "crash": type(exc).__name__})
             raise
+        # yaml.safe_dump of it too, as 1.x's apply-helper writes a config
+        # it changed (set_management_addresses).
         try:
-            _record("yaml", {"input": stream, "ok": True, "value": _tagged(value)})
+            dumped = {"dump": yaml.safe_dump(value, sort_keys=False)}
+        except Exception as exc:
+            dumped = {"dump_crash": type(exc).__name__}
+        try:
+            _record("yaml", {"input": stream, "ok": True, "value": _tagged(value), **dumped})
         except _Recursive:
-            _record("yaml", {"input": stream, "ok": True, "recursive": True})
+            _record("yaml", {"input": stream, "ok": True, "recursive": True, **dumped})
         _text_by_value[id(value)] = (value, stream)
         return value
 

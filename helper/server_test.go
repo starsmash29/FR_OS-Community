@@ -105,7 +105,7 @@ func TestSocketRoles(t *testing.T) {
 	}{
 		{Full, `{"cmd": "ping"}` + "\n", `{"ok":true,"message":"pong"}` + "\n"},
 		{Full, `{"cmd": "set_management_addresses"}` + "\n",
-			`{"ok":false,"message":"command 'set_management_addresses' is not in FR_OS 2 yet"}` + "\n"},
+			`{"ok":false,"message":"'addresses' must be a non-empty list of IPv4 addresses"}` + "\n"},
 		{Full, `{"cmd": "status"}` + "\n", `{"ok":false,"message":"unknown command 'status'"}` + "\n"},
 		{Sensor, `{"cmd": "ping"}` + "\n", `{"ok":true,"message":"pong"}` + "\n"},
 		{Sensor, `{"cmd": "save_config", "yaml": ""}` + "\n",

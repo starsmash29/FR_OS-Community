@@ -110,6 +110,41 @@ DOCUMENTS = [
     "[" * 50 + "]" * 50, "- " * 40 + "a\n",
 ]
 
+# Texts whose value is there for yaml.safe_dump (the plugin records what
+# it writes for every value loaded): how it quotes, wraps at 80
+# columns, writes a long or multi-line key, and anchors a list or a
+# mapping reached twice.
+_WORDS = " ".join(f"word{i}" for i in range(30))
+DUMPS = [
+    "a: " + _WORDS + "\n", "- " + _WORDS + "\n", "a:\n  b:\n    c: " + _WORDS + "\n", _WORDS,
+    "a: " + "x" * 120 + "\n", "a: \"" + _WORDS.replace(" ", "  ") + "\"\n", "a: \"- " + _WORDS + "\"\n",
+    "a: \": " + _WORDS + "\"\n", "a: \"#" + _WORDS + " '\"\n", "a: \"" + _WORDS + " \"\n",
+    "a: \" " + _WORDS + "\"\n", "a: \"" + _WORDS.replace(" ", " \\u00e9 ") + "\"\n",
+    "a: \"" + _WORDS.replace(" ", "\\u00e9") + "\"\n", "a: \"" + "\\u00e9" * 100 + "\"\n",
+    "a: \"" + "x" * 78 + " y z\"\n", "a: \"" + "x" * 79 + "  y\"\n", "a: \"" + _WORDS + "\\n\"\n",
+    "a: \"" + _WORDS.replace(" ", "\\n") + "\"\n", "a: \"" + _WORDS.replace(" ", " \\n ") + "\"\n",
+    "a: \"x\\ny\"\n", "a: \"x\\n\\ny\\n\"\n", "a: \"\\nx\"\n", "a: \"x \\n y\"\n", "a: \"x\\n y\"\n",
+    "a: \"x \\ny\"\n", "a: \"\\tx\"\n", "a: \"x\\ty\"\n", "a: \"x\\ry\"\n", "a: \"\\x00\\x7f\\x85\\xa0\"\n",
+    "a: \"\\u2028\\u2029\\ufeff\\U0001F600\\U0010FFFF\"\n", "a: \"it's\"\n", "a: \"'it'\"\n",
+    "a: \"say \\\"x\\\"\"\n", "a: \"back\\\\slash\"\n", "a: ' x'\n", "a: 'x '\n", "a: ''\n",
+    "a: '- x'\n", "a: '-x'\n", "a: '-'\n", "a: ': x'\n", "a: ':x'\n", "a: 'x:'\n", "a: 'x: y'\n", "a: 'x :y'\n",
+    "a: '? x'\n", "a: '?x'\n", "a: 'x #y'\n", "a: 'x#y'\n", "a: '[x]'\n", "a: 'x[y]'\n", "a: 'x,y'\n",
+    "a: '{x}'\n", "a: '---'\n", "a: '--- x'\n", "a: '...'\n", "a: '@x'\n", "a: '%x'\n", "a: '`x'\n",
+    "a: '!x'\n", "a: '&x'\n", "a: '*x'\n", "a: '|x'\n", "a: '>x'\n", "a: '\"x'\n", "a: x'y\n",
+    "a: '1.0'\n", "a: '1e5'\n", "a: 'null'\n", "a: '~'\n", "a: 'yes'\n", "a: 'NO'\n", "a: '2026-11-01'\n",
+    "a: '1:30'\n", "a: '0x1F'\n", "a: '<<'\n", "a: '='\n", "a: '.inf'\n", "a: '-.nan'\n", "a: '+1'\n",
+    "\"\": 1\n", "\"" + "k" * 120 + "\": 1\n", "\"" + "k" * 122 + "\": 1\n", "\"" + "k" * 123 + "\": 1\n",
+    "\"" + "k" * 130 + "\": 1\n", "\"k\\nl\": 1\n", "\"" + _WORDS + _WORDS + "\": 1\n", "\"yes\": 1\n",
+    "\" k\": 1\n", "\"\\u00e9\": 1\n", "~: 1\n", "1: a\n2.5: b\ntrue: c\n2026-11-01: d\n",
+    "2026-11-01 10:00:00+01:00: a\n", "a: 2026-11-01T10:00:00.5Z\n", "a: 2026-11-01T10:00:00-05:30\n",
+    "a: &x [1, 2]\nb: *x\nc: *x\n", "a: &x {k: v}\nb: *x\n", "a: &x []\nb: *x\n", "a: &x {}\nb: *x\n",
+    "a: [&x [1], *x, [*x]]\n", "a: &x\n  b: &y [1]\n  c: *y\nd: *x\n", "&a {k: *a}", "&a [*a, *a]",
+    "a: &x 1\nb: *x\n", "a: &s str\nb: *s\n", "a: &d 2026-11-01\nb: *d\n", "a: &t 2026-11-01 10:00:00\nb: [*t]\n", "a: &n ~\nb: *n\n", "a: []\nb: {}\nc: [[], {}]\n",
+    "a:\n- - 1\n  - 2\n- {}\n- []\n- k: 1\n  j: [x]\n", "- - - a\n", "- {a: {b: [c]}}\n",
+    "a: 1.0e+17\nb: 0.1\nc: -0.0\nd: 1.0e-05\ne: 1.5e+300\nf: 123456789012345678.0\n",
+    "a: 99999999999999999999999\nb: -0b101\nc: 0x1F\nd: 0755\ne: 1:30\n",
+]
+
 CONFIG = yaml.safe_dump(BASE, sort_keys=False)
 
 # (old, new) changes to the base config's text: one per config case.
@@ -220,7 +255,7 @@ def _config_text(edit):
     return CONFIG.replace(old, new, 1)
 
 
-TEXTS = SCALARS + DOCUMENTS + ["a: " + s + "\n" for s in SCALARS if "\n" not in s] + \
+TEXTS = SCALARS + DOCUMENTS + DUMPS + ["a: " + s + "\n" for s in SCALARS if "\n" not in s] + \
     ["- " + s + "\n" for s in SCALARS if "\n" not in s] + ["{a: " + s + "}" for s in SCALARS if "\n" not in s] + \
     [s + ": a\n" for s in SCALARS if "\n" not in s and s]
 

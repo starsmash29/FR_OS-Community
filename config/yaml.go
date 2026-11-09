@@ -243,7 +243,9 @@ func (c *constructor) object(n *pyyaml.Node) Value {
 			if n.Kind != pyyaml.SequenceNode {
 				constructorError("", pyyaml.Mark{}, n, "expected a sequence node, but found %s", n.Kind.ID())
 			}
-			box.items = make([]Value, 0, len(n.Items))
+			// Never a zero capacity: DumpYAML tells lists apart by their
+			// backing array, and an empty one needs one too.
+			box.items = make([]Value, 0, max(len(n.Items), 1))
 			for _, child := range n.Items {
 				box.items = append(box.items, c.object(child))
 			}

@@ -11,7 +11,9 @@ IoT isolation, the conntrack sample, an activity-log entry), and the
 ones that read the system for the webUI's views (the firewall's drops,
 WireGuard, the XDP counters, IPv6, the listening sockets, the RAM
 modules, the IoT scan), with every program's output as it comes and
-then odd.
+then odd; and moving the webUI's address (config.yaml rewritten with
+yaml.safe_dump, then applied) and refreshing the ad-block lists, with
+urllib.request.urlopen answering from the case's "fetch" table.
 Nothing is run and nothing outside the case's own directory is touched:
 
 - every absolute path 1.x's modules hold (module constants and the
@@ -99,6 +101,7 @@ class _Fake:
         self.calls: list = []
         self.passed: dict[int, int] = {}
         self.leaks: set[str] = set()
+        self.fetch: list = []
         self.active = False
         allowed = {str(root), os.path.realpath(root), "/dev/null", "/dev/urandom", "/usr/share/zoneinfo",
                    "/etc/localtime", "/proc/self", tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())}
@@ -275,8 +278,41 @@ def system(monkeypatch, tmp_path):
         return real_stat(path, *a, **k)
 
     monkeypatch.setattr(os, "stat", stat)
+    import urllib.error
+    import urllib.request
+
+    def urlopen(request, timeout=None):
+        """The case's "fetch" table: a body (text, or hex), an HTTP
+        status, or a URLError's reason; never the network."""
+        url = request.full_url if isinstance(request, urllib.request.Request) else request
+        for answer in state["fake"].fetch:
+            if answer["url"] != url:
+                continue
+            if "status" in answer:
+                raise urllib.error.HTTPError(url, answer["status"], answer["reason"], {}, None)
+            if "error" in answer:
+                raise urllib.error.URLError(answer["error"])
+            body = bytes.fromhex(answer["hex"]) if "hex" in answer else answer["body"].encode()
+            return _Response(body)
+        raise urllib.error.URLError("not in the case's table")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     yield root, make
     _hook_fake.clear()
+
+
+class _Response:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def read(self) -> bytes:
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 def _snapshot(root: Path) -> dict:
@@ -340,7 +376,7 @@ def _wait(server, later: float) -> list[str]:
 
 def _session(system, name: str, setup: dict, requests: list, table: list | None = None,
              random: bytes = b"", decided: str | None = None, openssl=OPENSSL,
-             login_users: tuple[str, ...] = ()) -> None:
+             login_users: tuple[str, ...] = (), fetch: list | None = None) -> None:
     from frfw.helper import server as helper_server
     from frfw.helper.peer import PeerPolicy
 
@@ -348,6 +384,7 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
     from frfw import management
 
     fake = make(table or [], random, openssl)
+    fake.fetch = fetch or []
     management.ssh_login_users = lambda: list(login_users)  # the fixture puts it back
     for rel, content in setup.items():
         path = root / rel
@@ -386,6 +423,8 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
     case = {"id": name, "setup": before, "table": fake.table, "random": random.hex(), "now": NOW,
             "openssl": [*openssl[0], openssl[1]], "login_users": list(login_users),
             "steps": steps, "files": _snapshot(root), "leaks": sorted(fake.leaks)}
+    if fetch is not None:
+        case["fetch"] = fetch
     if decided:
         case["decided"] = decided
     _record(_rooted(case, str(root)))
@@ -1201,3 +1240,137 @@ COMMAND_SESSIONS.update(VIEW_SESSIONS)
 def test_command_session(system, name):
     setup, requests, table = COMMAND_SESSIONS[name]
     _session(system, f"command/{name}", setup, requests, table, RANDOM)
+
+
+# --- moving the webUI, and refreshing the ad-block lists (phase 2c-3) ------------------
+#
+# set_management_addresses rewrites config.yaml with yaml.safe_dump and
+# applies it, held for confirmation; refresh_adblock downloads the lists
+# the config names, with urllib answering from the case's "fetch" table.
+
+#: RICH with comments, an alias and a list the management settings and
+#: the IPv6 settings share (the rewritten text anchors it).
+MANAGED = "# the router at home\n" + RICH.replace(
+    "ipv6: {enabled: true, lan_zones: [lan],", "management: {zones: &mz [lan], confirm_apply_seconds: 60}\n"
+    "ipv6: {enabled: true, lan_zones: *mz,  # LAN only\n       ", 1)
+
+
+def _manage(addresses=None, **fields) -> dict:
+    request = {"cmd": "set_management_addresses", **fields}
+    if addresses is not None:
+        request["addresses"] = addresses
+    return request
+
+
+MANAGEMENT_SESSIONS = {
+    "moved": (_tree(MANAGED, MANAGED), [
+        _manage(["10.0.0.1"], user="admin"), {"cmd": "apply_status"},
+        _manage(["10.0.0.1"]),
+        lambda steps: {"cmd": "apply_confirm", "id": _pending_id(steps)},
+        _manage(["10.0.0.1"], user="y" * 80),
+    ], []),
+    "refused requests": (_tree(MANAGED, MANAGED), [
+        _manage(), _manage([]), _manage("10.0.0.1"), _manage([5]), _manage(["10.0.0.1", None]), _manage({"a": 1}),
+        _manage(["192.0.2.9"]), _manage(["not an address"]), _manage([""]),
+    ], []),
+    "unapplied changes": (_tree(RICH2, RICH), [_manage(["10.0.0.1"])], []),
+    "waiting": (_tree(RICH2, RICH), [{"cmd": "apply", "confirm": True}, _manage(["10.0.0.1"])], []),
+    "nothing applied yet": (_tree(RICH), [_manage(["10.0.0.1"], user=7)], []),
+    "no config": ({}, [_manage(["10.0.0.1"])], []),
+    "empty config": ({"etc/fr_os/config.yaml": ""}, [_manage(["10.0.0.1"])], []),
+    "not a mapping": ({"etc/fr_os/config.yaml": "- a\n"}, [_manage(["10.0.0.1"])], []),
+    "management not a mapping": ({"etc/fr_os/config.yaml": "management: [1]\n"}, [_manage(["10.0.0.1"])], []),
+    "management a number": ({"etc/fr_os/config.yaml": "management: 5\n"}, [_manage(["10.0.0.1"])], []),
+    "management zero": ({"etc/fr_os/config.yaml": "management: 0\n"}, [_manage(["10.0.0.1"])], []),
+    "bad yaml": ({"etc/fr_os/config.yaml": "a: [\n"}, [_manage(["10.0.0.1"])], []),
+    "apply fails": (_tree(MANAGED, MANAGED), [_manage(["10.0.0.1"])], FAILURES["ruleset load"]),
+    "moving refused": (_tree(RICH, RICH), [_manage(["10.0.0.1"])], FAILURES["revert unit"]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(MANAGEMENT_SESSIONS))
+def test_management_session(system, name):
+    setup, requests, table = MANAGEMENT_SESSIONS[name]
+    text = setup.get("etc/fr_os/config.yaml")
+    try:
+        links = _links(text) if text else []
+    except Exception:  # not a config
+        links = []
+    _session(system, f"management/{name}", setup, requests, table + [RUNNING] + links, RANDOM)
+
+
+#: A router whose ad-blocker has a base list of two sources and two
+#: categories; local names and an allowlist that must never be blocked.
+ADBLOCK = PLAIN + """\
+dhcp:
+  lan: {range_start: 192.168.7.100, range_end: 192.168.7.200, dns_servers: [192.168.7.1]}
+adblocker:
+  enabled: true
+  source_urls: ["https://lists.example/hosts", "https://lists.example/missing"]
+  categories:
+    social: ["https://lists.example/social", "http://down.example/social"]
+    malware: ["https://lists.example/malware"]
+  allowlist: [good.example]
+  serve_lan: true
+local_dns: {domain: home.arpa, hosts: {nas.home.arpa: 192.168.7.10}}
+"""
+
+HOSTS_LIST = """\
+# a hosts-format list
+127.0.0.1 localhost
+0.0.0.0 ads.example tracker.example  # two on one line
+0.0.0.0 ADS.Example
+::  v6.example
+0.0.0.0 cdn.good.example good.example notgood.example
+0.0.0.0 use-application-dns.net
+0.0.0.0 nas.home.arpa home.arpa
+0.0.0.0 -bad.example bad-.example ok-1.example under_score.example
+0.0.0.0 x.""" + "a" * 64 + """.example
+999.0.0.1 not-an-address.example
+||filter.example^
+https://url.example/path
+plain.example.
+single
+0.0.0.0
+\tspaced.example\t
+"""
+
+MALWARE_LIST = "evil.example\nEvil.Example\nworse.example # yes\n\x0bvertical.example\x85next.example\n"
+
+
+def _fetch(url, **answer) -> dict:
+    return {"url": url, **answer}
+
+
+ADBLOCK_FETCH = [
+    _fetch("https://lists.example/hosts", body=HOSTS_LIST),
+    _fetch("https://lists.example/missing", status=404, reason="Not Found"),
+    _fetch("https://lists.example/social", hex=b"0.0.0.0 social.example\n0.0.0.0 caf\xe9.example\n\xff\xfe\n".hex()),
+    _fetch("http://down.example/social", error="[Errno -2] Name or service not known"),
+    _fetch("https://lists.example/malware", body=MALWARE_LIST),
+]
+
+STALE = {"etc/fr_os/adblock.d/old.hosts": "0.0.0.0 old.example\n", "etc/fr_os/adblock.d/.hosts": "x\n",
+         "etc/fr_os/adblock.d/notes.txt": "kept\n", "etc/fr_os/adblock.d/malware.hosts": "0.0.0.0 before.example\n"}
+
+ADBLOCK_SESSIONS = {
+    "refresh": (_tree(ADBLOCK, **STALE), ADBLOCK_FETCH),
+    "a category down": (_tree(ADBLOCK, **STALE), [
+        a if a["url"] != "https://lists.example/malware" else _fetch(a["url"], status=503, reason="Slow Down")
+        for a in ADBLOCK_FETCH]),
+    "everything down": (_tree(ADBLOCK, **STALE), [_fetch(a["url"], error="timed out") for a in ADBLOCK_FETCH]),
+    "categories only": (_tree(ADBLOCK.replace(
+        '  source_urls: ["https://lists.example/hosts", "https://lists.example/missing"]\n', ""),
+        **{"etc/fr_os/adblock.hosts": "0.0.0.0 old.example\n"}), ADBLOCK_FETCH),
+    "base list only": (_tree(PLAIN + "adblocker: {enabled: true, source_urls: [\"https://lists.example/hosts\"]}\n",
+                             **STALE), ADBLOCK_FETCH),
+    "nothing to fetch": (_tree(PLAIN), ADBLOCK_FETCH),
+    "no config": ({}, ADBLOCK_FETCH),
+    "bad config": ({"etc/fr_os/config.yaml": "version: 2\n"}, ADBLOCK_FETCH),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ADBLOCK_SESSIONS))
+def test_adblock_session(system, name):
+    setup, fetch = ADBLOCK_SESSIONS[name]
+    _session(system, f"adblock/{name}", setup, [{"cmd": "refresh_adblock"}], [], RANDOM, fetch=fetch)
