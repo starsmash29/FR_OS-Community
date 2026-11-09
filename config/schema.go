@@ -360,3 +360,24 @@ func (c *Config) ManagementZones() map[string]bool { return managedZones(c) }
 func (c *Config) IPv6LanExclusions() map[string]string {
 	return ipv6LanExclusions(&c.Zones, &c.Nat, c.Rules)
 }
+
+// IPv6ExcludedZones are (zone, why) for each zone with an interface
+// left out of the default ipv6.lan_zones (frfw.ipv6.excluded_zones):
+// none while IPv6 is off or the list is explicit, which the loader
+// refuses such a zone in.
+func (c *Config) IPv6ExcludedZones() []ZoneReason {
+	if !c.IPv6.Enabled || c.IPv6.LanZones != nil {
+		return nil
+	}
+	withInterface := map[string]bool{}
+	for _, i := range c.Interfaces.Values() {
+		withInterface[i.Zone] = true
+	}
+	var out []ZoneReason
+	for _, e := range ipv6LanExclusionList(&c.Zones, &c.Nat, c.Rules) {
+		if withInterface[e.Zone] {
+			out = append(out, e)
+		}
+	}
+	return out
+}

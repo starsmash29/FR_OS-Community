@@ -929,8 +929,22 @@ func (c *Config) IPv6LanZones() []string {
 // (naming it, or no zone at all), would be got around over IPv6; one
 // whose traffic comes from the internet is no gap.
 func ipv6LanExclusions(zones *Ordered[Zone], nat *NatConfig, rules []Rule) map[string]string {
-	facing := internetFacing(zones, nat)
 	out := map[string]string{}
+	for _, e := range ipv6LanExclusionList(zones, nat, rules) {
+		out[e.Zone] = e.Why
+	}
+	return out
+}
+
+// ZoneReason is a zone and why it is left out of something.
+type ZoneReason struct{ Zone, Why string }
+
+// ipv6LanExclusionList is ipv6LanExclusions in 1.x's dict order: rule
+// by rule, then zone by zone, each zone with the first rule's reason.
+func ipv6LanExclusionList(zones *Ordered[Zone], nat *NatConfig, rules []Rule) []ZoneReason {
+	facing := internetFacing(zones, nat)
+	var out []ZoneReason
+	set := map[string]bool{}
 	for i := range rules {
 		r := &rules[i]
 		if r.Action == Accept || r.ToZone == SelfZone || !r.IPv4AddressesOnly() {
@@ -947,8 +961,9 @@ func ipv6LanExclusions(zones *Ordered[Zone], nat *NatConfig, rules []Rule) map[s
 				continue
 			}
 			if r.FromZone == "" || r.FromZone == z || r.ToZone == "" || r.ToZone == z {
-				if _, set := out[z]; !set {
-					out[z] = reason
+				if !set[z] {
+					set[z] = true
+					out = append(out, ZoneReason{z, reason})
 				}
 			}
 		}

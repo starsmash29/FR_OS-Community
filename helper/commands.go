@@ -37,6 +37,20 @@ func (s *Server) dispatch(cmd config.Value, request *config.Map) (any, error) {
 		return s.iotIsolationStatus()
 	case "dhcp_leases":
 		return s.dhcpLeases()
+	case "iot_scan":
+		return s.cmdIotScan()
+	case "wireguard_status":
+		return s.cmdWireguardStatus()
+	case "firewall_drops":
+		return s.cmdFirewallDrops()
+	case "xdp_stats":
+		return s.cmdXdpStats()
+	case "ipv6_status":
+		return s.cmdIPv6Status()
+	case "listening_sockets":
+		return s.cmdListeningSockets()
+	case "hw_ram_info":
+		return s.cmdHwRAMInfo()
 	case "apply":
 		return s.cmdApply(request)
 	case "apply_confirm":

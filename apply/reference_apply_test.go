@@ -223,7 +223,8 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 // pythonJSONError is a message quoting Python's json error, which 2.x
 // words its own way after the same prefix (decisions.md, "the helper's
 // requests").
-var pythonJSONError = regexp.MustCompile(`^(could not parse ip neigh output: ).*: line \d+ column \d+ \(char \d+\)$`)
+var pythonJSONError = regexp.MustCompile(`^(could not parse ip neigh output: |could not read the IPv6 state: |invalid request: )` +
+	`.*: line \d+ column \d+ \(char \d+\)$`)
 
 func samePythonJSONError(got, want string) bool {
 	msg := func(text string) (string, bool) {

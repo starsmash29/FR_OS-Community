@@ -7,7 +7,11 @@ Each case is a short session with 1.x's apply-helper request handler
 for confirmation and then confirmed or reverted, a rollback, a save; or
 the commands that act on one host, with the neighbour table and nft
 answering from the case's table (a ban, a quarantine, a ZTNA sign-in,
-IoT isolation, the conntrack sample, an activity-log entry).
+IoT isolation, the conntrack sample, an activity-log entry), and the
+ones that read the system for the webUI's views (the firewall's drops,
+WireGuard, the XDP counters, IPv6, the listening sockets, the RAM
+modules, the IoT scan), with every program's output as it comes and
+then odd.
 Nothing is run and nothing outside the case's own directory is touched:
 
 - every absolute path 1.x's modules hold (module constants and the
@@ -922,6 +926,275 @@ COMMAND_SESSIONS = {
         _cmd("audit_append", entry={f"k{i}": i for i in range(20)}),
     ], []),
 }
+
+
+# --- the commands that read the system for the webUI's views (phase 2c-2) ---------
+# What the firewall dropped, the WireGuard peers, the XDP counters, the
+# IPv6 the provider gave, what listens, the RAM modules, and the IoT scan:
+# each program's output as the kernel and the tools write it, then odd.
+
+VIEWS = HOSTS.replace("lan_zones: [lan], ", "").replace(
+    "  iot: {device: eth2, zone: iot, address: 10.0.2.1/24}\n",
+    "  iot: {device: eth2, zone: iot, address: 10.0.2.1/24}\n"
+    "  guest: {device: eth3, zone: guest, address: 10.0.3.1/24}\n").replace(
+    "zones: {wan: {}, lan: {}, iot: {}, vpn: {}}", "zones: {wan: {}, lan: {}, iot: {}, guest: {}, vpn: {}}").replace(
+    "  - {name: iot-to-wan, action: accept, from_zone: iot, to_zone: wan}\n",
+    "  - {name: iot-to-wan, action: accept, from_zone: iot, to_zone: wan}\n"
+    "  - {name: no-printer, action: drop, from_zone: iot, to_zone: wan, src_address: [10.0.2.9]}\n").replace(
+    'ula_prefix: "fd12:3456:789a::/48"}',
+    'ula_prefix: "fd12:3456:789a::/48", pinholes: [\n'
+    '    {name: web, zone: lan, host: "::10", proto: tcp, port: 443},\n'
+    '    {name: cam, zone: guest, host: "2001:db8:100:1::7", proto: udp, port: "8000-8010"},\n'
+    '    {name: printer, zone: iot, host: "::9", proto: tcp, port: 631}]}')
+
+WG_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
+
+def _seq(argv, answers) -> list:
+    """Table entries that answer the n-th call of argv with answers[n]
+    (the last one from then on)."""
+    return [{"argv": argv, "after": i, **a} for i, a in reversed(list(enumerate(answers)))]
+
+
+def _json(argv, value) -> dict:
+    return {"argv": argv, "stdout": json.dumps(value)}
+
+
+def _addr6(local, prefixlen, scope="global", family="inet6", **extra) -> dict:
+    return {"family": family, "local": local, "prefixlen": prefixlen, "scope": scope, **extra}
+
+
+ADDR6 = ["ip", "-j", "-6", "addr", "show"]
+ROUTE6 = ["ip", "-j", "-6", "route", "show", "table", "main"]
+ACTIVE = [{"argv": ["systemctl", "is-active", "--", "fr-dhcp6"], "stdout": "active\n"},
+          {"argv": ["systemctl", "is-active", "--", "fr-ra"], "stdout": "activating\n"}]
+
+LINKS6 = [
+    {"ifname": "lo", "addr_info": [_addr6("::1", 128, "host")]},
+    {"ifname": "eth0", "addr_info": [_addr6("2001:db8:1::5", 64), _addr6("2001:db8:1::9", 128), _addr6("fe80::1", 64, "link"),
+                                     _addr6("203.0.113.2", 24, family="inet"), _addr6("2001:DB8:1:0::7", "64")]},
+    {"ifname": "eth1", "addr_info": [_addr6("2001:db8:100::1", 64), _addr6("2001:db8:100:5::1", 64),
+                                     _addr6("fd12:3456:789a::1", 64), _addr6("2001:db8:100:9::1", 80)]},
+    {"ifname": "eth3", "addr_info": [_addr6("fd12:3456:789a:1::1", 64), _addr6("fd12:3456:789a:9::1", 64)]},
+    {"ifname": "eth2"},
+    {"ifname": "eth9", "addr_info": [_addr6("2001:db8:300::1", 64)]},
+]
+ROUTES6 = [
+    {"dst": "default", "gateway": "fe80::1", "dev": "eth0", "protocol": "ra"},
+    {"dst": "default", "gateway": "FE80::0:2", "dev": "eth0"},
+    {"dst": "default", "dev": "eth0"},
+    {"dst": "default", "gateway": "fe80::3", "dev": "eth1"},
+    {"dst": "2001:db8:100::/56", "type": "unreachable", "protocol": "dhcp", "dev": "lo"},
+    {"dst": "2001:db8:200::/64", "type": "unreachable", "protocol": "dhcp"},
+    {"dst": "2001:db8:300::/96", "type": "unreachable", "protocol": "dhcp"},
+    {"dst": "fe80::/64", "type": "unreachable", "protocol": "dhcp"},
+    {"dst": "ff00::/8", "type": "unreachable", "protocol": "dhcp"},
+    {"dst": "2001:db8:400::/48", "type": "unreachable", "protocol": "kernel"},
+    {"dst": 5, "type": "unreachable", "protocol": "dhcp"},
+    {"dst": "", "type": "unreachable", "protocol": "dhcp"},
+    {"dst": "2001:db8:1::/64", "dev": "eth0", "protocol": "ra"},
+]
+
+WG_DUMP = ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxw=\tprivate\t51820\toff\n"
+           "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\t(none)\t198.51.100.20:40000\t10.9.0.2/32\t1793491100\t1024\t2048\t25\n"
+           "peer2=\t(none)\t(none)\t10.9.0.3/32\t0\t\t\toff\n"
+           "short\tline\n"
+           "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\t(none)\t[2001:db8::20]:40001\t10.9.0.2/32\t 1_793 \t+5\t0\toff\n")
+
+
+def _drop(message, ts="1793491100123456", **extra) -> str:
+    record = {"MESSAGE": message, **extra}
+    if ts is not None:
+        record["__REALTIME_TIMESTAMP"] = ts
+    return json.dumps(record)
+
+
+JOURNAL = "\n".join([
+    _drop("fr_os/drop/input: IN=eth0 OUT= MAC=00:11 SRC=198.51.100.7 DST=203.0.113.2 LEN=60 PROTO=TCP SPT=40000 DPT=22"),
+    _drop("kernel: fr_os/drop/forward: IN=eth1 OUT=eth0 SRC=10.0.0.50 DST=9.9.9.9 PROTO=UDP SPT=5000 DPT=53",
+          ts="1793491150000000"),
+    _drop("fr_os/drop/ipv6-input:IN=eth0 SRC=2001:db8::1 DST=2001:db8::2 PROTO=ICMPv6 IN=eth9 X DPT="),
+    _drop("fr_os/drop/input", ts="x"),
+    _drop("fr_os/drop/ input  : SRC=1.2.3.4", ts=None),
+    _drop("fr_os/drop/input: SRC=5.6.7.8", ts=1793491100.5),
+    _drop("fr_os/drop/input: SRC=5.6.7.9", ts="1793491100123456"),
+    _drop("something else: SRC=1.1.1.1"),
+    _drop([102, 114]),
+    "not json",
+    "",
+    json.dumps({"__REALTIME_TIMESTAMP": "1"}),
+    _drop("fr_os/drop/input: SRC=7.7.7.7", ts=[1]),
+    _drop("fr_os/drop/input: SRC=8.8.8.8", ts=None, extra=1),
+]) + "\n"
+
+SS = """\
+tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=612,fd=3))
+tcp   LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=612,fd=4))
+tcp   LISTEN 0      4096      10.0.0.1:443       0.0.0.0:*    users:(("fr-webui",pid=700,fd=7),("fr-webui",pid=701,fd=7))
+udp   UNCONN 0      0       0.0.0.0%eth1:67         0.0.0.0:*    users:(("kea-dhcp4",pid=800,fd=12))
+udp   UNCONN 0      0       0.0.0.0%eth1:67         0.0.0.0:*    users:(("kea-dhcp4",pid=800,fd=12))
+udp   UNCONN 0      0                *:68               *:*
+udp   UNCONN 0      0    [fe80::1]%eth0:546            [::]:*
+tcp   LISTEN 0      10       127.0.0.1:631       0.0.0.0:*
+udp   UNCONN 0      0          0.0.0.0:5353      0.0.0.0:*    users:(("x",
+udp   UNCONN 0      0          0.0.0.0:51820     0.0.0.0:*
+tcp   LISTEN 0      10       10.0.0.1:x       0.0.0.0:*
+tcp   LISTEN 0      10       nonsense:80       0.0.0.0:*
+raw   UNCONN 0      0          0.0.0.0:1      0.0.0.0:*
+tcp   LISTEN 0
+udp   UNCONN 0      0       10.0.0.1:0099999999999999999999      0.0.0.0:*
+tcp   LISTEN 0      10       noport       0.0.0.0:*
+"""
+
+IP_ADDR = [
+    {"ifname": "lo", "addr_info": [{"family": "inet", "local": "127.0.0.1"}, {"family": "inet6", "local": "::1"}]},
+    {"ifname": "eth0", "addr_info": [{"family": "inet", "local": "203.0.113.2"}, {"family": "inet6"}]},
+    {"ifname": "eth1"},
+    {"ifname": "eth1", "addr_info": [{"local": "10.0.0.1"}]},
+    {"ifname": 5, "addr_info": [{"local": 7}]},
+    {"ifname": True, "addr_info": []},
+    {"ifname": None, "addr_info": {"x": 1}},
+    {"ifname": 5.5, "addr_info": ["no", {"local": "fe80::1"}]},
+]
+
+DMIDECODE = """\
+# dmidecode 3.4
+Getting SMBIOS data from sysfs.
+SMBIOS 3.3.0 present.
+
+Handle 0x0010, DMI type 16, 23 bytes
+Physical Memory Array
+\tLocation: System Board Or Motherboard
+\tMaximum Capacity: 64 GB
+
+Handle 0x0011, DMI type 17, 92 bytes
+Memory Device
+\tSize: 16 GB
+\tSpeed: 3200 MT/s
+\tPart Number: CMK32GX4M2E3200C16
+\tConfigured Memory Speed: 2666 MT/s
+
+Handle 0x0012, DMI type 17, 92 bytes
+Memory Device
+\tSize: No Module Installed
+\tSpeed: Unknown
+
+Handle 0x0013, DMI type 17, 92 bytes
+Memory Device
+\tSize: 8 GB
+\tSpeed: 2400MT/s
+\tPart Number:    
+\tConfigured Memory Speed: Unknown
+\tNote: a: b
+
+Handle 0x0014, DMI type 17, 92 bytes
+Memory Device
+    Size: 4096 MB
+    Configured Memory Speed: 0 MT/s
+    Speed: ٣٢٠٠ MT/s
+Memory Device
+\tSize: 4 GB
+"""
+
+BPF_STATS = "sys/fs/bpf/fr_os_xdp/maps/stats"
+BPFTOOL = ["bpftool", "map", "dump", "pinned", "@ROOT@/" + BPF_STATS]
+IOT_SCAN = ["systemctl", "start", "--", "fr-iot-scan.service"]
+
+VIEW_REQUESTS = [_cmd(c) for c in ("iot_scan", "wireguard_status", "firewall_drops", "xdp_stats", "ipv6_status",
+                                   "listening_sockets", "hw_ram_info")]
+
+VIEW_SESSIONS = {
+    "views": (_tree(VIEWS, None, **{"etc/fr_os/wireguard/private.key": WG_KEY + "\n", BPF_STATS: ""}), VIEW_REQUESTS, [
+        *ACTIVE, _json(ADDR6, LINKS6), _json(ROUTE6, ROUTES6),
+        {"argv": ["wg", "show", "wg0", "dump"], "stdout": WG_DUMP},
+        {"argv": ["journalctl"], "stdout": JOURNAL},
+        {"argv": ["ss", "-Hlntup"], "stdout": SS}, _json(["ip", "-j", "addr", "show"], IP_ADDR),
+        {"argv": ["dmidecode"], "stdout": DMIDECODE},
+        _json(BPFTOOL, [{"key": 0, "value": 12}, {"key": 4, "value": 3}, {"key": True, "value": 7}, {"key": 99, "value": 1},
+                        {"key": -1, "value": 1}, {"key": 9, "value": {"a": [1]}}, {"key": 3, "value": 5, "key": 2}]),
+    ]),
+    "views, nothing yet": (_tree(HOSTS), VIEW_REQUESTS, []),
+    "views, booting": (_tree(HOSTS), [_cmd("iot_scan"), _cmd("ipv6_status")],
+                       [{"argv": ["systemctl", "is-system-running"], "stdout": "starting\n"}]),
+    "views, programs missing": (_tree(HOSTS, None, **{BPF_STATS: ""}), VIEW_REQUESTS,
+                                [{"argv": [p], "error": "missing"} for p in
+                                 ("systemctl", "wg", "journalctl", "bpftool", "ip", "ss", "dmidecode")]),
+    "views, ip missing": (_tree(HOSTS), [_cmd("listening_sockets")], [{"argv": ["ip"], "error": "missing"}]),
+    "views, programs time out": (_tree(HOSTS, None, **{BPF_STATS: ""}), VIEW_REQUESTS[:6],
+                                 [{"argv": [p], "error": "timeout"} for p in
+                                  ("systemctl", "wg", "journalctl", "bpftool", "ip", "ss")]),
+    "views, ip times out": (_tree(HOSTS), [_cmd("listening_sockets")], [{"argv": ["ip"], "error": "timeout"}]),
+    "views, programs fail": (_tree(HOSTS, None, **{BPF_STATS: ""}), [*VIEW_REQUESTS, _cmd("iot_scan"),
+                                                                     *[_cmd("listening_sockets")] * 2, _cmd("hw_ram_info")], [
+        *_seq(IOT_SCAN, [{"rc": 1, "stderr": "Job for fr-iot-scan.service failed.\n"}, {"rc": 5, "stdout": " out \n"}]),
+        {"argv": ["wg"], "rc": 1, "stderr": "Unable to access interface: No such device\n"},
+        {"argv": ["journalctl"], "rc": 1, "stdout": JOURNAL.splitlines()[0]},
+        {"argv": ["bpftool"], "rc": 255, "stderr": "Error: bpf obj get: Operation not permitted\n"},
+        {"argv": ADDR6, "rc": 1, "stderr": "Cannot open netlink socket: Permission denied\n"},
+        *_seq(["ss"], [{"rc": 1, "stderr": "Cannot open netlink socket\n"}, {"rc": 1}, {"stdout": ""}]),
+        {"argv": ["ip", "-j", "addr"], "rc": 2},
+        *_seq(["dmidecode"], [{"rc": 1, "stderr": "/dev/mem: Permission denied\n"}, {"rc": 2, "stderr": " \n"}]),
+    ]),
+    "views, odd output": (_tree(VIEWS, None, **{"etc/fr_os/wireguard/private.key": "not a key\n", BPF_STATS: ""}), [
+        *[_cmd("wireguard_status")] * 2, *[_cmd("firewall_drops")] * 2, *[_cmd("xdp_stats")] * 9,
+        *[_cmd("listening_sockets")] * 7, *[_cmd("hw_ram_info")] * 2], [
+        *_seq(["wg"], [{"stdout": "if\n" + "k\t\tx\ty\t1\t2\tbig\n"}, {"stdout": ""}]),
+        *_seq(["journalctl"], [{"stdout": "[1]\n"}, {"stdout": _drop("fr_os/drop/x:", ts=10 ** 400) + "\n"}]),
+        *_seq(BPFTOOL, [{"stdout": "{not json"}, {"stdout": "5"}, {"stdout": '[{"key": 1.0, "value": 1}]'},
+                        {"stdout": '[{"key": "x", "value": 1}]'}, {"stdout": '[{"key": 1}]'}, {"stdout": "[[1]]"},
+                        {"stdout": '["k"]'}, {"stdout": "[7]"}, {"stdout": '{"key": 1}'}]),
+        *_seq(["ip", "-j", "addr", "show"], [{"stdout": "{"}, {"stdout": "[{}]"}, {"stdout": '[{"ifname": [1]}]'},
+                                             {"stdout": '[{"ifname": "a", "addr_info": ["local"]}]'},
+                                             {"stdout": '[{"ifname": "a", "addr_info": [5]}]'},
+                                             {"stdout": '[{"ifname": "a", "addr_info": 5}]'}, {"stdout": "7"}]),
+        *_seq(["dmidecode"], [{"stdout": "Memory Device\n\tSize: 1 GB\n\tSpeed: ²666 MT/s\n"},
+                              {"stdout": "Memory Device\n\tSize: 1 GB\n\tConfigured Memory Speed: 1¹ MT/s\n"}]),
+    ]),
+    "views, ipv6 off": (_tree(PLAIN), [_cmd("ipv6_status")], []),
+    "views, no config": ({}, [_cmd("ipv6_status")], []),
+    "views, no kernel ipv6": (
+        {k: v for k, v in _tree(HOSTS).items() if not k.startswith("proc/sys/net/ipv6/")}, [_cmd("ipv6_status")], []),
+    "views, ipv6 address only": (_tree(VIEWS), [_cmd("ipv6_status")], [
+        _json(ADDR6, [{"ifname": "eth0", "addr_info": [_addr6("2001:db8:1::5", 64)]}])]),
+    "views, ipv6 prefix too small": (_tree(VIEWS), [_cmd("ipv6_status")], [*ACTIVE,
+        _json(ADDR6, [{"ifname": "eth1", "addr_info": [_addr6("2001:db8:100::1", 64)]}]),
+        _json(ROUTE6, [{"dst": "2001:db8:100::/64", "type": "unreachable", "protocol": "dhcp"}])]),
+    "views, ipv6 /64 handed on": (_tree(VIEWS), [_cmd("ipv6_status")], [
+        _json(ADDR6, [{"ifname": "eth3", "addr_info": [_addr6("2001:db8:100:1::1", 64)]},
+                      {"ifname": "eth1", "addr_info": [_addr6("2001:db8:100::1", 64)]}])]),
+    "views, ipv6 no LAN zone": (_tree(VIEWS.replace("ipv6: {enabled: true, ", "ipv6: {enabled: true, lan_zones: [], ")),
+                                 [_cmd("ipv6_status")], [
+        _json(ROUTE6, [{"dst": "2001:db8:100::/56", "type": "unreachable", "protocol": "dhcp"}])]),
+    "views, ipv6 odd output": (_tree(VIEWS), [_cmd("ipv6_status")] * 16, [
+        *_seq(ADDR6, [{"stdout": "{"}, {"stdout": "5"}, {"stdout": '["x"]'}, {"stdout": '{"a": 1}'},
+                      *[_json(ADDR6, [{"ifname": "eth0", "addr_info": info}]) for info in (
+                          5, None, [{"family": "inet6", "scope": "global", "local": None, "prefixlen": 64}],
+                          [{"family": "inet6", "scope": "global", "prefixlen": 64}],
+                          [{"family": "inet6", "scope": "global", "local": "2001:db8::1"}],
+                          [_addr6("2001:db8::1", "x")], [_addr6("2001:db8::1", None)], [_addr6("2001:db8::1", 1.9)],
+                          [_addr6("nonsense", 64)], [_addr6("2001:db8::1", 129)], ["x"],
+                          [_addr6("fd00::1", 64)])],
+                      ]),
+        _json(ROUTE6, []),
+    ]),
+    "views, ipv6 odd ULA device": (_tree(VIEWS), [_cmd("ipv6_status")] * 2, [
+        *_seq(ADDR6, [_json(ADDR6, [{"ifname": ["eth1"], "addr_info": [_addr6("fd12:3456:789a::1", 64)]}]),
+                      _json(ADDR6, [{"ifname": 7, "addr_info": [_addr6("fd12:3456:789a::1", 64)]}])])]),
+    "views, ipv6 odd routes": (_tree(VIEWS), [_cmd("ipv6_status")] * 8, [
+        *_seq(ROUTE6, [{"stdout": "x"}, {"stdout": '[1]'}, *[_json(ROUTE6, [route]) for route in (
+            {"dst": "default", "dev": "eth0", "gateway": "nonsense"},
+            {"dst": "default", "dev": "eth0", "gateway": 1},
+            {"dst": "nonsense", "type": "unreachable", "protocol": "dhcp"},
+            {"dst": "2001:db8::1/64", "type": "unreachable", "protocol": "dhcp"},
+            {"dst": -1, "type": "unreachable", "protocol": "dhcp"},
+            {"dst": "default", "dev": ["eth0"], "gateway": "fe80::1", "type": "unreachable", "protocol": "dhcp"})]]),
+        {"argv": ADDR6, "rc": 0, "stdout": ""},
+    ]),
+    "views, ipv6 ip fails": (_tree(VIEWS), [_cmd("ipv6_status")] * 3, [
+        *_seq(ADDR6, [{"error": "missing"}, {"error": "timeout"}, {"stdout": "[]"}]),
+        {"argv": ROUTE6, "rc": 1, "stderr": ""}]),
+}
+COMMAND_SESSIONS.update(VIEW_SESSIONS)
 
 
 @pytest.mark.parametrize("name", sorted(COMMAND_SESSIONS))

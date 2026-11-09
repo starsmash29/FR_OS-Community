@@ -110,8 +110,9 @@ with `invalid request: ...` where 1.x answered the command:
 Where 1.x's message quotes Python's own JSON or codec error ("Expecting
 value: line 1 column 1 (char 0)", "'utf-8' codec can't decode ..."), and
 in "could not parse nft JSON output: ..." (and, since phase 2c-1, "could
-not parse ip neigh output: ..."), 2.x says what is wrong in its
-own words after the same prefix; the test checks the prefix. Every other
+not parse ip neigh output: ..."; since phase 2c-2, "could not read the
+IPv6 state: ..."), 2.x says what is wrong in its own words after the
+same prefix; the test checks the prefix. Every other
 message, refusals and command errors included, is 1.x's word for word.
 
 A command 1.x knows and 2.x doesn't run yet answers `command '<cmd>' is
