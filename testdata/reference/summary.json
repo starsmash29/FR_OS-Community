@@ -1,17 +1,17 @@
 {
   "apply": 164,
-  "config": 1797,
+  "config": 1835,
   "helper": 483,
   "qr": 28,
   "render": 1664,
-  "ruleset": 2211,
+  "ruleset": 2210,
   "skipped": {
     "config_not_json": 13,
     "ruleset_not_json": 0,
     "ruleset_unknown_config": 2,
     "yaml_not_text": 0
   },
-  "webui": 54,
-  "yaml": 1827,
-  "yaml_config": 255
+  "webui": 71,
+  "yaml": 1854,
+  "yaml_config": 267
 }

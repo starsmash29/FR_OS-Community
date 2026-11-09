@@ -187,7 +187,12 @@ func replay(t *testing.T, c reference.WebUICase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rooted := func(s string) string { return strings.ReplaceAll(s, root, "@ROOT@") }
+	// A redirect carries the root form-encoded (a helper error's socket
+	// path in ?error=); the recording has it as @ROOT@ form-encoded.
+	rooted := func(s string) string {
+		s = strings.ReplaceAll(s, root, "@ROOT@")
+		return strings.ReplaceAll(s, url.QueryEscape(root), url.QueryEscape("@ROOT@"))
+	}
 	for i, step := range c.Steps {
 		if step.Advance != nil {
 			now += *step.Advance
@@ -206,10 +211,14 @@ func replay(t *testing.T, c reference.WebUICase) {
 		if w.Code != step.Status {
 			t.Errorf("%s: status %d, 1.x %d\n%s", where, w.Code, step.Status, w.Body.String())
 		}
-		if got, want := headerSet(w.Result().Header), wantHeaders(step.ResponseHeaders); !slices.Equal(got, want) {
-			t.Errorf("%s: headers\n got %q\nwant %q", where, got, want)
+		gotHeaders := headerSet(w.Result().Header)
+		for i := range gotHeaders {
+			gotHeaders[i] = rooted(gotHeaders[i])
 		}
-		compareBody(t, where, w.Body.Bytes(), step, w.Header().Get("Content-Type"))
+		if want := wantHeaders(step.ResponseHeaders); !slices.Equal(gotHeaders, want) {
+			t.Errorf("%s: headers\n got %q\nwant %q", where, gotHeaders, want)
+		}
+		compareBody(t, where, []byte(rooted(w.Body.String())), step, w.Header().Get("Content-Type"))
 
 		got, err := config.PyJSON(helpers.calls, -1, true)
 		if err != nil {

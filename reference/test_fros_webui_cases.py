@@ -42,6 +42,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote_plus
 
 import pyotp
 import pytest
@@ -273,8 +274,10 @@ def _files(root: Path) -> dict:
 
 
 def _rooted(value, root: str):
+    # A redirect carries the root form-encoded (a helper error's socket
+    # path in ?error=), so that form is replaced too.
     if isinstance(value, str):
-        return value.replace(root, "@ROOT@")
+        return value.replace(root, "@ROOT@").replace(quote_plus(root), quote_plus("@ROOT@"))
     if isinstance(value, list):
         return [_rooted(v, root) for v in value]
     if isinstance(value, dict):
@@ -749,6 +752,136 @@ RULE = {"name": "block-dmz", "action": "drop", "from_zone": "lan", "to_zone": "w
         "schedule_start": "08:00", "schedule_end": "17:00", "cut_established": "true",
         "expires": "2026-12-24T18:00"}
 
+#: A router with every filter on (phase 3b-2's screens).
+FILTER_CONFIG = """\
+version: 1
+hostname: edge-gw
+interfaces:
+  wan:
+    device: eth0
+    zone: wan
+  lan:
+    device: eth1
+    zone: lan
+    address: 192.168.1.1/24
+  iot:
+    device: eth2
+    zone: iot
+    address: 192.168.20.1/24
+zones:
+  wan: {}
+  lan: {}
+  iot: {}
+nat:
+  masquerade:
+  - out_zone: wan
+dhcp:
+  lan:
+    range_start: 192.168.1.100
+    range_end: 192.168.1.200
+    dns_servers: [192.168.1.1]
+    reservations:
+    - mac: "aa:bb:cc:dd:ee:10"
+      address: 192.168.1.10
+rules:
+- name: lan-to-wan
+  action: accept
+  from_zone: lan
+  to_zone: wan
+adblocker:
+  enabled: true
+  source_urls: [https://lists.example/hosts]
+  serve_lan: true
+  query_logging: true
+  categories:
+    malware: [https://lists.example/malware]
+    my-list: [https://lists.example/mine, https://lists.example/mine2]
+  allowlist: [ok.example]
+local_dns:
+  domain: lan
+  hosts:
+    nas.lan: 192.168.1.10
+    printer.lan: 192.168.1.11
+  overrides:
+    intranet.example: 192.168.1.12
+ai_ids:
+  enabled: true
+  excluded_macs: ["aa:bb:cc:dd:ee:10"]
+  quarantine_duration_seconds: 900
+tls_fingerprint:
+  enabled: true
+  blocklist:
+  - fingerprint: t13d1516h2_8daaf6152771_e5627efa2ab1
+    label: old curl
+  - 0123456789abcdef0123456789abcdef
+xdp_sni_filter:
+  enabled: true
+  interfaces: [lan, iot]
+  blocklist: [ads.example.com, tracker.example.net]
+app_control:
+  enabled: true
+  observe_sni: true
+  blocked_apps: [tiktok]
+iot:
+  enabled: true
+  zones: [iot]
+  auto_isolate: true
+  trusted_macs: ["aa:bb:cc:dd:ee:02"]
+  isolated_macs: ["aa:bb:cc:dd:ee:03"]
+"""
+
+SENSORS = "etc/fr_os/sensors/"
+
+AI_EVENTS = json.dumps([
+    {"ip": "192.168.1.20", "score": 7.5, "reasons": ["conn_rate", "scan"], "conn_rate": 120.0,
+     "unique_dst_ratio": 0.9, "sni_block_count": 0, "ts": NOW - 600},
+    {"ip": "2001:db8::20", "mac": "aa:bb:cc:dd:ee:20", "score": 9, "reasons": ["dga"], "conn_rate": 3,
+     "unique_dst_ratio": 0.1, "sni_block_count": 2, "nxdomain_count": 40, "dga_nxdomain_count": 12,
+     "dns_threat_count": 1, "ts": NOW - 60}])
+
+APP_USAGE = json.dumps({"generated": NOW - 30, "apps": {
+    "youtube": {"hits_24h": 340, "active_clients": 2, "last_seen": NOW - 40, "clients": {
+        "192.168.1.20": {"hits_24h": 40, "last_seen": NOW - 40, "active": True, "sources": ["dns", "sni"]},
+        "192.168.1.21": {"hits_24h": 300, "last_seen": NOW - 4000, "active": False, "sources": ["dns"]},
+        "192.168.1.99": {"hits_24h": 300, "last_seen": "never"}}},
+    "whatsapp": {"hits_24h": 12, "active_clients": 0, "last_seen": NOW - 9000},
+    "tiktok": {"hits_24h": 3, "active_clients": 2, "last_seen": NOW - 100, "clients": {}}}})
+
+INVENTORY = json.dumps({"scanned_at": NOW - 120, "messages": ["scanned iot: 3 devices", "isolated 2"], "devices": [
+    {"mac": "aa:bb:cc:dd:ee:01", "ip": "192.168.20.5", "hostname": "cam-1", "vendor": "Hikvision",
+     "services": ["_rtsp._tcp"], "category": "iot", "score": 6, "reasons": ["vendor Hikvision", "rtsp"]},
+    {"mac": "aa:bb:cc:dd:ee:02", "ip": "192.168.1.21", "hostname": None, "vendor": "Apple",
+     "services": [], "category": "general", "score": -3, "reasons": ["randomized MAC"]},
+    {"mac": "aa:bb:cc:dd:ee:03", "ip": None, "vendor": None, "services": [], "category": "unknown",
+     "score": 0, "reasons": []},
+    {"mac": "AA-BB-CC-DD-EE-04", "ip": "192.168.20.6", "hostname": "plug", "vendor": "Tuya",
+     "services": ["_hap._tcp"], "category": "iot", "score": 4, "reasons": ["vendor Tuya"]},
+    {"mac": "not a mac", "ip": "192.168.20.7", "category": "weird", "score": 1, "reasons": ["?"]}]})
+
+TLS_STATE = json.dumps({"generated": NOW - 50, "learning": False,
+                        "stats": {"hellos": 4242, "parse_errors": 3}, "clients": {
+    "192.168.1.20": {
+        "t13d1516h2_8daaf6152771_e5627efa2ab1": {"ja3": ["0123456789abcdef0123456789abcdef"],
+                                                "sni": ["example.com"], "count": 3, "last_seen": NOW - 300},
+        "t13d1715h2_5b57614c22b0_3d5424432f57": {"ja3": ["aa" * 16, "bb" * 16], "sni": ["a.example", "b.example"],
+                                                "count": 90, "last_seen": NOW - 30}},
+    "192.168.20.5": {
+        "t13d1715h2_5b57614c22b0_3d5424432f57": {"ja3": [], "sni": [], "count": 1, "last_seen": NOW - 9000}}},
+    "events": [
+        {"type": "new", "client": "192.168.1.20", "ja4": "t13d1715h2_5b57614c22b0_3d5424432f57", "ts": NOW - 3000},
+        {"type": "blocklist", "label": "old curl", "client": "192.168.1.20",
+         "ja4": "t13d1516h2_8daaf6152771_e5627efa2ab1", "sni": "example.com", "action": "quarantined",
+         "ts": NOW - 300}]})
+
+XDP_STATE = json.dumps({"attached": {"eth1": "xdpdrv", "eth2": "xdpgeneric", "eth9": "xdpdrv"},
+                        "program": "/sys/fs/bpf/fr_os/xdp", "gro_off": []})
+
+
+def _ip_link(device: str, mode: int, name: str = "xdp_sni_filter") -> dict:
+    return {"argv": ["ip", "-j", "link", "show", "dev", device], "stdout": json.dumps([{
+        "ifname": device, "xdp": {"mode": mode, "prog": {"id": 42, "name": name}}}])}
+
+
 SESSIONS = {
     # -- signing in ------------------------------------------------------------------
     "login/form-no-account": ({"accounts": [], "files": {"etc/fr_os/config.yaml": None}}, [{"get": "/login"}, {"get": "/"}]),
@@ -1053,6 +1186,161 @@ SESSIONS = {
     "segments/overlap": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG.replace(
         "192.168.1.1/24", "192.168.0.1/16")}}, [
         *_login(), {"post": "/segments", "form": {"segment": ["guest"]}}]),
+    # -- AI IDS ----------------------------------------------------------------------
+    "ai-ids/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG, SENSORS + "ai_ids_state.json": AI_EVENTS},
+        "programs": [{"argv": ["systemctl", "is-active", "--", "fr-ai-ids.service"], "stdout": "active\n"}]}, [
+        *_login(), {"get": "/ai-ids"}, {"get": "/ai-ids"},
+        {"post": "/ai-ids/settings", "form": {"enabled": "true", "excluded_macs": " aa:bb:cc:dd:ee:10 ,, AA:BB:CC:DD:EE:11",
+                                             "quarantine_duration_seconds": "3600"}},
+        {"post": "/ai-ids/settings", "form": {"quarantine_duration_seconds": "0"}},
+        {"post": "/ai-ids/settings", "form": {"quarantine_duration_seconds": "1.5"}},
+        {"post": "/ai-ids/settings", "form": {}},
+        {"get": "/ai-ids"}],
+        [{"cmd": "ids_quarantine_status", "reply": {
+            "ok": True, "count": 2, "quarantined": [{"ip": "192.168.1.20", "expires_in": 512}],
+            "macs": [{"mac": "aa:bb:cc:dd:ee:20", "expires_in": 77}]}, "times": 1},
+         {"cmd": "ids_quarantine_status", "reply": {"ok": False, "message": "no quarantine set"}}]),
+    "ai-ids/empty": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": None, SENSORS + "ai_ids_state.json": "{\"not\": \"a list\"}"},
+        "programs": [{"argv": ["systemctl"], "error": "missing"}]}, [
+        *_login(), {"get": "/ai-ids"}]),
+    "ai-ids/invalid": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG.replace("quarantine_duration_seconds: 900",
+                                                       "quarantine_duration_seconds: -5"),
+        SENSORS + "ai_ids_state.json": "[broken"}}, [*_login(), {"get": "/ai-ids"}]),
+    # -- applications ----------------------------------------------------------------
+    "apps/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG, SENSORS + "appid_usage.json": APP_USAGE,
+        SENSORS + "iot_inventory.json": INVENTORY},
+        "programs": [{"argv": ["systemctl", "is-active", "--", "fr-appid.service"], "stdout": "inactive\n"}]}, [
+        *_login(), {"get": "/apps"},
+        {"post": "/apps/settings", "form": {"enabled": "1", "block_via_xdp": "on"}},
+        {"post": "/apps/block", "form": {"blocked_apps": ["youtube", "zz-unknown", "messenger", "youtube", "aa-x"]}},
+        {"post": "/apps/block", "form": {"blocked_apps": ["netflix", "tiktok"]}},
+        {"post": "/apps/block", "form": {}},
+        {"post": "/apps/settings", "form": {"enabled": "maybe"}},
+        {"get": "/apps"}]),
+    "apps/nothing": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG, SENSORS + "appid_usage.json": "{\"apps\": []}",
+        SENSORS + "iot_inventory.json": "[]"}}, [*_login(), {"get": "/apps"}]),
+    # -- TLS fingerprints ------------------------------------------------------------
+    "tls/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG, SENSORS + "tls_fingerprints.json": TLS_STATE,
+        SENSORS + "iot_inventory.json": INVENTORY},
+        "programs": [{"argv": ["systemctl", "is-active", "--", "fr-tls-fp.service"], "stdout": "active\n"}]}, [
+        *_login(), {"get": "/tls"},
+        {"post": "/tls/block", "form": {"fingerprint": " T13D1715H2_5B57614C22B0_3D5424432F57 ",
+                                        "label": " blocked from 192.168.1.20 "}},
+        {"post": "/tls/block", "form": {"fingerprint": "not-a-fingerprint"}},
+        {"post": "/tls/block", "form": {"label": "x"}},
+        {"post": "/tls/unblock", "form": {"fingerprint": "0123456789ABCDEF0123456789ABCDEF"}},
+        {"post": "/tls/settings", "form": {"enabled": "true", "quarantine_on_match": "true"}},
+        {"get": "/tls"}]),
+    "tls/nothing": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG, SENSORS + "tls_fingerprints.json": "[1, 2]"}}, [
+        *_login(), {"get": "/tls"}, {"post": "/tls/settings", "form": {}}, {"post": "/tls/unblock",
+                                                                          "form": {"fingerprint": "abc"}},
+        {"get": "/tls"}]),
+    # -- IoT -------------------------------------------------------------------------
+    "iot/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG, SENSORS + "iot_inventory.json": INVENTORY}}, [
+        *_login(), {"get": "/iot"}, {"get": "/iot"}, {"get": "/iot"},
+        {"post": "/iot/device", "form": {"mac": " AA:BB:CC:DD:EE:04 ", "action": "trust"}},
+        {"post": "/iot/device", "form": {"mac": "aa:bb:cc:dd:ee:02", "action": "isolate"}},
+        {"post": "/iot/device", "form": {"mac": "aa:bb:cc:dd:ee:03", "action": "clear"}},
+        {"post": "/iot/device", "form": {"mac": "aa:bb:cc:dd:ee:03", "action": "forget"}},
+        {"post": "/iot/device", "form": {"mac": "zz", "action": "trust"}},
+        {"post": "/iot/device", "form": {"mac": "aa:bb:cc:dd:ee:05", "action": "isolate"}},
+        {"post": "/iot/scan"}, {"post": "/iot/scan"}, {"post": "/iot/scan"},
+        {"post": "/iot/settings", "form": {"enabled": "true", "zones": ["iot", "lan"], "auto_isolate": "true",
+                                           "isolation_mode": "block"}},
+        {"post": "/iot/settings", "form": {"enabled": "true", "zones": ["nope"]}},
+        {"get": "/iot"}],
+        [{"cmd": "iot_isolation_status", "reply": {"ok": True, "isolated": ["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:03"],
+                                                   "count": 2}, "times": 1},
+         {"cmd": "iot_isolation_status", "reply": {"ok": False, "message": "no isolation set"}, "times": 1},
+         {"cmd": "iot_isolation_status", "error": True, "times": 1},
+         {"cmd": "iot_sync_isolation", "reply": {"ok": True, "count": 3}, "times": 1},
+         {"cmd": "iot_sync_isolation", "reply": {"ok": False, "message": "nft refused"}, "times": 1},
+         {"cmd": "iot_sync_isolation", "error": True, "times": 1},
+         {"cmd": "iot_scan", "reply": {"ok": True, "message": "scanned"}, "times": 1},
+         {"cmd": "iot_scan", "reply": {"ok": False, "message": "scan unit failed"}, "times": 1},
+         {"cmd": "iot_scan", "error": True}]),
+    "iot/off": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG, SENSORS + "iot_inventory.json": json.dumps(
+            {"messages": ["error: no zones"], "devices": []})}}, [
+        *_login(), {"get": "/iot"}, {"post": "/iot/scan"},
+        {"post": "/iot/device", "form": {"mac": "aa:bb:cc:dd:ee:09", "action": "trust"}},
+        {"post": "/iot/settings", "form": {"enabled": "true", "zones": ["lan"]}},
+        {"post": "/iot/scan"}, {"get": "/iot"}],
+        [{"cmd": "iot_scan", "reply": {"ok": True, "message": "scanned"}}]),
+    "iot/invalid": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG.replace("isolation_mode", "x").replace("auto_isolate: true",
+                                                                                       "auto_isolate: 5")}}, [
+        *_login(), {"get": "/iot"}, {"post": "/iot/scan"}]),
+    # -- ad-block and local names ----------------------------------------------------
+    "adblock/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG,
+        "etc/fr_os/adblock.hosts": "# list\n0.0.0.0 a.example\n0.0.0.0 b.example\n\n #x\n",
+        "etc/fr_os/adblock.d/malware.hosts": "0.0.0.0 bad.example\n"},
+        "programs": [{"argv": ["systemctl", "is-active", "--", "fr-adblock-dns"], "stdout": "active\n"}]}, [
+        *_login(), {"get": "/adblock"},
+        {"post": "/adblock/local-dns/add", "form": {"kind": "hosts", "name": " Server.LAN. ", "address": " 192.168.1.13 "}},
+        {"post": "/adblock/local-dns/add", "form": {"kind": "hosts", "name": "nas.lan", "address": "192.168.1.14"}},
+        {"post": "/adblock/local-dns/add", "form": {"kind": "cname", "name": "x.lan", "address": "1.2.3.4"}},
+        {"post": "/adblock/local-dns/add", "form": {"kind": "overrides", "name": "bad name", "address": "1.2.3.4"}},
+        {"post": "/adblock/local-dns/remove", "form": {"kind": "hosts", "name": "printer.lan"}},
+        {"post": "/adblock/local-dns/remove", "form": {"kind": "hosts", "name": "printer.lan"}},
+        {"post": "/adblock/local-dns/remove", "form": {"kind": "cname", "name": "nas.lan"}},
+        {"post": "/adblock/local-dns/domain", "form": {"domain": " Home.Arpa. "}},
+        {"post": "/adblock/local-dns/domain", "form": {}},
+        {"post": "/adblock/settings", "form": {
+            "enabled": "true", "source_urls": "https://a.example/hosts, https://b.example/hosts\nhttps://a.example/hosts",
+            "xdp_critical_limit": "500", "categories": ["phishing", "malware"],
+            "allowlist": "OK.example\nfine.example,ok.example", "serve_lan": "true", "force_dns": "true"}},
+        {"post": "/adblock/settings", "form": {"categories": ["warez"]}},
+        {"post": "/adblock/settings", "form": {"xdp_critical_limit": "-1"}},
+        {"post": "/adblock/refresh"}, {"post": "/adblock/refresh"}, {"post": "/adblock/refresh"},
+        {"get": "/adblock"}],
+        [{"cmd": "refresh_adblock", "reply": {"ok": True, "message": "Refreshed: 1234 domains"}, "times": 1},
+         {"cmd": "refresh_adblock", "reply": {"ok": False}, "times": 1},
+         {"cmd": "refresh_adblock", "reply": {"ok": True}}]),
+    "adblock/off": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG}}, [
+        *_login(), {"get": "/adblock"},
+        {"post": "/adblock/local-dns/add", "form": {"kind": "hosts", "name": "nas.lan", "address": "192.168.1.10"}},
+        {"post": "/adblock/settings", "form": {"enabled": "true"}},
+        {"get": "/adblock"}]),
+    "adblock/last-name": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": FILTER_CONFIG.replace(
+        "  domain: lan\n", "").replace("    printer.lan: 192.168.1.11\n", "").replace(
+        "  overrides:\n    intranet.example: 192.168.1.12\n", "")}}, [
+        *_login(), {"post": "/adblock/local-dns/remove", "form": {"kind": "hosts", "name": "nas.lan"}},
+        {"get": "/adblock"}]),
+    "adblock/refresh-gone": ({"accounts": [ADMIN]}, [*_login(), {"post": "/adblock/refresh"}],
+                             [{"cmd": "refresh_adblock", "error": True}]),
+    # -- the XDP SNI filter ----------------------------------------------------------
+    "xdp/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG, "etc/fr_os/xdp_state.json": XDP_STATE},
+        "programs": [_ip_link("eth1", 1), {"argv": ["ip", "-j", "link", "show", "dev", "eth2"], "stdout": json.dumps([{
+            "ifname": "eth2", "xdp": {"attached": [{"mode": 3, "prog": {"id": 7, "name": "other"}},
+                                                   {"mode": 2, "prog": {"id": 42, "name": "xdp_sni_filter"}}]}}])},
+                     {"argv": ["ip", "-j", "link", "show", "dev", "eth9"], "rc": 1, "stderr": "Device does not exist"}]}, [
+        *_login(), {"get": "/xdp"}, {"get": "/xdp"},
+        {"post": "/xdp/blocklist/remove", "form": {"domain": "ads.example.com"}},
+        {"post": "/xdp/blocklist/remove", "form": {"domain": "missing.example"}},
+        {"post": "/xdp/settings", "form": {"enabled": "true", "interfaces": ["lan"],
+                                           "blocklist": " a.example, b.example\na.example\n\n"}},
+        {"post": "/xdp/settings", "form": {"interfaces": ["dmz"]}},
+        {"get": "/xdp"}],
+        [{"cmd": "xdp_stats", "reply": {"ok": True, "stats": {"drop_match": 17, "pass": 9}}, "times": 1},
+         {"cmd": "xdp_stats", "error": True}]),
+    "xdp/not-attached": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG, "etc/fr_os/xdp_state.json": "{broken"}}, [
+        *_login(), {"get": "/xdp"}],
+        [{"cmd": "xdp_stats", "reply": {"ok": False, "message": "no map"}}]),
+    "xdp/off": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG}}, [
+        *_login(), {"get": "/xdp"}, {"post": "/xdp/blocklist/remove", "form": {"domain": "x.example"}},
+        {"get": "/xdp"}]),
     # -- the dashboard's buttons -----------------------------------------------------
     "dashboard/apply": ({"accounts": [ADMIN]}, [
         *_login(), {"post": "/apply?dry_run=1"}, {"post": "/apply"}, {"get": "/"}],

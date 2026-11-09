@@ -1,0 +1,140 @@
+{{define "title"}}Ad-Block & DNS Filtering - FR_OS{{end}}
+{{define "content"}}
+<h1>Ad-Block &amp; DNS Filtering</h1>
+<p class="muted">
+  Downloads blocklists (hosts files or plain domain lists), dedupes them,
+  and serves the result from a dedicated, frfw-managed DNS resolver
+  (dnsmasq). Each category is kept as its own list, so blocks and counts
+  can be told apart. Optionally also pushes a small "critical" subset of
+  the base list into the existing Phase 4 XDP kernel filter.
+</p>
+
+<div class="card status-card">
+  <span class="badge {{.Data.BadgeClass}}">{{.Data.StatusLabel}}</span>
+  <dl>
+    <dt>Domains loaded</dt>
+    <dd>{{.Data.DomainCount}}</dd>
+    {{range .Data.Counts}}
+    <dt>{{.Name}}</dt><dd>{{.Count}}</dd>
+    {{end}}
+  </dl>
+</div>
+
+<form method="post" action="/adblock/settings">
+{{.CSRFInput}}
+<div class="card">
+  <h3>Base list</h3>
+  <label class="checkbox-row"><input type="checkbox" name="enabled" value="true" {{if .Data.Enabled}}checked{{end}}> Enabled</label>
+
+  <label for="source_urls">Ad/tracker source lists (one URL per line; reported as "{{.Data.BaseCategory}}")</label>
+  <textarea id="source_urls" name="source_urls" rows="3" placeholder="{{.Data.DefaultSourceURL}}">{{.Data.SourceURLsText}}</textarea>
+  <p class="muted">Suggested: {{.Data.DefaultSourceURL}}</p>
+
+  <label for="xdp_critical_limit">XDP critical-subset size (0 = off)</label>
+  <input type="number" id="xdp_critical_limit" name="xdp_critical_limit" min="0" value="{{.Data.XDPCriticalLimit}}">
+  <p class="muted">
+    Feeds up to this many base-list domains into the existing <a href="/xdp">TLS SNI
+    filter</a>'s kernel blocklist -- only takes effect if that filter is
+    also enabled; leave at 0 to keep everything DNS-side.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Categories</h3>
+  <p class="muted">Each list's own license and terms apply -- check them before use in a business.</p>
+  {{range .Data.Presets}}
+  <label class="checkbox-row">
+    <input type="checkbox" name="categories" value="{{.Name}}" {{if .Selected}}checked{{end}}>
+    <strong>{{.Title}}</strong> <span class="muted">({{.Name}}) -- {{.Note}}</span>
+  </label>
+  {{end}}
+  {{if .Data.Custom}}
+  <p class="muted">Custom categories from config.yaml (kept as they are):</p>
+  <ul>
+    {{range .Data.Custom}}
+    <li><code>{{.Name}}</code>: {{.URLs}}</li>
+    {{end}}
+  </ul>
+  {{end}}
+
+  <label for="allowlist">Allowlist (one domain per line; its subdomains are allowed too)</label>
+  <textarea id="allowlist" name="allowlist" rows="3" placeholder="example.com">{{.Data.AllowlistText}}</textarea>
+</div>
+
+<div class="card">
+  <h3>LAN DNS</h3>
+  <label class="checkbox-row"><input type="checkbox" name="serve_lan" value="true" {{if .Data.ServeLAN}}checked{{end}}>
+    Serve DHCP clients: announce this router as their DNS server (the pools' DNS servers become upstreams)</label>
+  <label class="checkbox-row"><input type="checkbox" name="force_dns" value="true" {{if .Data.ForceDNS}}checked{{end}}>
+    Enforce: redirect all plain DNS to this resolver, block DNS-over-TLS, disable Firefox's automatic DoH</label>
+  <label class="checkbox-row"><input type="checkbox" name="query_logging" value="true" {{if .Data.QueryLogging}}checked{{end}}>
+    Log queries for the AI IDS (NXDOMAIN bursts, DGA-like names, malware/phishing lookups) -- records who looked up what in the system journal</label>
+</div>
+
+<button type="submit">Save</button>
+</form>
+
+<div class="card">
+  <h3>Local names</h3>
+  <p class="muted">
+    Names the router's resolver answers itself, for the clients it serves
+    (needs Enabled and "Serve DHCP clients" above). A host is one exact
+    name; an override also covers every subdomain, e.g. an internal server
+    for a public name. They are never sent upstream and never blocked.
+  </p>
+  {{if .Data.LocalDNS}}
+  <table>
+    <thead><tr><th>Name</th><th>Address</th><th>Kind</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.LocalDNS}}
+    <tr>
+      <td><code>{{.Name}}</code></td><td>{{.Address}}</td><td>{{.Label}}</td>
+      <td>
+        <form method="post" action="/adblock/local-dns/remove">
+          {{$.CSRFInput}}
+          <input type="hidden" name="kind" value="{{.Kind}}">
+          <input type="hidden" name="name" value="{{.Name}}">
+          <button type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No local names yet.</p>
+  {{end}}
+  <form method="post" action="/adblock/local-dns/add">
+    {{.CSRFInput}}
+    <label for="local_name">Name</label>
+    <input type="text" id="local_name" name="name" placeholder="nas.lan" required>
+    <label for="local_address">IPv4 address</label>
+    <input type="text" id="local_address" name="address" placeholder="192.168.10.20" required>
+    <label for="local_kind">Kind</label>
+    <select id="local_kind" name="kind">
+      <option value="hosts">Host (this name only)</option>
+      <option value="overrides">Override (the name and its subdomains)</option>
+    </select>
+    <button type="submit">Add</button>
+  </form>
+  <form method="post" action="/adblock/local-dns/domain">
+    {{.CSRFInput}}
+    <label for="local_domain">Local domain (never asked upstream; a name under it that isn't a host doesn't exist)</label>
+    <input type="text" id="local_domain" name="domain" value="{{.Data.LocalDomain}}" placeholder="lan">
+    <button type="submit">Save domain</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Refresh</h3>
+  <p class="muted">
+    Downloads and dedupes the configured lists right now, instead of
+    waiting for the daily <code>fr-adblock-refresh.timer</code>. Can take a
+    while depending on list size and network speed.
+  </p>
+  <form method="post" action="/adblock/refresh">
+    {{.CSRFInput}}
+    <button type="submit">Refresh now</button>
+  </form>
+</div>
+{{end}}
