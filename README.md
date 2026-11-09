@@ -15,6 +15,8 @@
   drafts firewall changes for you to review.
 </p>
 
+<p align="center"><strong>Built in Go and Rust · Go uses <code>encoding/json/v2</code></strong></p>
+
 <p align="center">
   <a href="#100-local"><img src="https://img.shields.io/badge/100%25%20Local-cloud%20optional-198754" alt="100% Local with an optional cloud model"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/Go-control%20plane-00ADD8?logo=go&amp;logoColor=white" alt="Go control plane"></a>
@@ -36,7 +38,7 @@
 
 FR_OS Community Edition is a Debian-based firewall and router OS for x86-64
 homelabs. It combines the original FR_OS firewall, the AI Perimeter assistant,
-and the hackathon work in one Go and Rust codebase.
+and the hackathon work in one product.
 
 ### 100% Local
 
@@ -101,7 +103,9 @@ incident on real router hardware using a simulated attack scenario.
   operations before changing router state.
 
 Go and Rust communicate using one JSON object per line over Unix sockets.
-Both implementations use the same [protocol test vectors](testdata/ipc/vectors.json).
+The Go side uses `encoding/json/v2` from the Go standard library, and the
+Rust side uses Serde. Both implementations are checked against the same
+[protocol test vectors](testdata/ipc/vectors.json).
 [Architecture and source layout](AGENTS.md#which-language-does-what)
 
 ## Installation & deployment
