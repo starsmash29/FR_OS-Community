@@ -1,0 +1,49 @@
+{{define "title"}}ZTNA Session Status - FR_OS{{end}}
+{{define "content"}}
+<div class="card" style="max-width:420px;margin:2rem auto;">
+  <h1 style="font-size:1.2rem;">Zero Trust Network Access</h1>
+
+  {{if .Data.Authorized}}
+  <p>
+    <span class="badge badge-green">Authorized</span>
+  </p>
+  <dl>
+    <dt class="muted">Device</dt>
+    <dd style="margin:0 0 0.6rem;"><code>{{.Data.ClientIP}}</code></dd>
+    <dt class="muted">Bound to</dt>
+    <dd style="margin:0 0 0.6rem;" id="ztna-bound">{{if .Data.BoundMAC}}this device's hardware address <code>{{.Data.BoundMAC}}</code>{{else}}your WireGuard key{{end}}</dd>
+    {{if .Data.ZTNAUsername}}
+    <dt class="muted">Signed in as</dt>
+    <dd style="margin:0 0 0.6rem;">{{.Data.ZTNAUsername}}</dd>
+    {{end}}
+    <dt class="muted">Time remaining</dt>
+    <dd style="margin:0;font-weight:600;">{{.Data.Expires}}</dd>
+  </dl>
+  <p class="muted" style="margin-top:0.8rem;">
+    This is enforced entirely by the kernel's own nftables timer -- this
+    page just asks what the firewall currently thinks, it does not
+    itself keep you signed in. Reload this page any time to check your
+    remaining time.
+  </p>
+  {{else}}
+  <p>
+    <span class="badge badge-red">Not authorized</span>
+  </p>
+  {{if .Data.NotDirect}}
+  <p class="muted" id="ztna-not-direct">
+    <code>{{.Data.ClientIP}}</code> reaches the router through another router
+    or NAT, so the router can't tell the devices there apart, and won't
+    sign them all in at once. Connect through the router's WireGuard VPN
+    and sign in there.
+  </p>
+  {{else}}
+  <p class="muted">
+    <code>{{.Data.ClientIP}}</code> is not currently authorized for
+    protected-zone access -- either you haven't signed in yet, or your
+    session has expired.
+  </p>
+  {{end}}
+  <p><a href="/ztna/login">Sign in</a></p>
+  {{end}}
+</div>
+{{end}}

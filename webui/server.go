@@ -73,10 +73,13 @@ func New(env Env, version, codename string) (*Server, error) {
 		helper: helper{env}, tickets: newTicketStore(env, TicketSeconds), enrolments: newTicketStore(env, 600)}
 	s.guard = newBruteforceGuard(env, env.Paths.LoginGuard(), deviceLookup(s.helper))
 	s.pages = map[string]*template.Template{}
-	base := template.Must(template.New("").ParseFS(templateFS, "templates/base.html", "templates/auth_head.html"))
+	// join is Jinja's `|join(sep)` for a list of strings.
+	funcs := template.FuncMap{"join": func(items []string, sep string) string { return strings.Join(items, sep) }}
+	base := template.Must(template.New("").Funcs(funcs).ParseFS(templateFS, "templates/base.html", "templates/auth_head.html"))
 	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login", "dashboard",
 		"rules", "nat", "interfaces", "dhcp", "segments",
-		"ai_ids", "apps", "tls", "iot", "adblock", "xdp"} {
+		"ai_ids", "apps", "tls", "iot", "adblock", "xdp",
+		"ztna", "ztna_login", "ztna_status", "vpn", "vpn_peer", "system"} {
 		t := template.Must(template.Must(base.Clone()).ParseFS(templateFS, "templates/"+name+".html"))
 		s.pages[name] = t
 	}

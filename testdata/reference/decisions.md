@@ -286,3 +286,29 @@ and gone). Cases: none differ. Decided:
   redirect (a helper error's socket path in `?error=`) as `@ROOT@`
   form-encoded, and the replay compares pages and headers with its own
   root put back the same way. No recorded case changes otherwise.
+
+## 2026-11-09: the ZTNA gate, the VPN and the system screen (phase 3b-3)
+
+The ZTNA gate (admin settings, the public sign-in and status pages, an
+account locked out), the WireGuard VPN screen (devices with their own
+key and with a key pair the router makes, shown once with its QR code)
+and the system screen are replayed in thirteen sessions of webui.jsonl.
+Cases: none differ. Decided:
+
+- **The TLS library the system screen names** is "Go crypto/tls
+  (X25519MLKEM768)". 1.x shows the host's OpenSSL version, the library
+  its webUI speaks TLS through; FR_OS 2's webUI uses Go's crypto/tls,
+  which always offers the hybrid group, so the screen says that. The
+  harness sets 1.x's `ssl.OPENSSL_VERSION` to the same text.
+- **Software integrity is not verifiable** on FR_OS 2 yet: it keeps no
+  list of its files' hashes. The card says "FR_OS 2 keeps no list of its
+  files' hashes yet"; the harness has 1.x's integrity check give that
+  report, so the dashboard's integrity item stays "unknown" as in 3a-2.
+- **A VPN device's key pair** is made from the case's recorded random
+  bytes in the harness (X25519 from 32 bytes), as FR_OS 2 makes it from
+  its own random source.
+- **The harness keeps mount points unmoved**: the live medium and the
+  persistence mounts are paths as the kernel reports them in
+  /proc/mounts, not files under the case's root, so 1.x's
+  `persistence.LIVE_MEDIUM_MOUNT` and `LIVE_PERSISTENCE_PREFIX` are no
+  longer rerooted. No earlier case had a live system, so none changes.

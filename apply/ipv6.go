@@ -55,8 +55,10 @@ func (s *System) checkIPv6(c *config.Config) error {
 
 // readULAState is the state file as a dict; empty when it can't be read
 // or isn't one.
-func (s *System) readULAState() *config.Map {
-	text, ok := readText(s.Paths.IPv6ULAState)
+func (s *System) readULAState() *config.Map { return readULAStateAt(s.Paths.IPv6ULAState) }
+
+func readULAStateAt(path string) *config.Map {
+	text, ok := readText(path)
 	if !ok {
 		return config.NewMap()
 	}
@@ -94,6 +96,13 @@ func validULA(v config.Value) *netip.Prefix {
 // or the one the router generated (nil until an apply generated it).
 func (s *System) ULAPrefix(c *config.Config) *netip.Prefix {
 	generated, _ := s.readULAState().Get("generated")
+	return render.ULAPrefix(c, validULA(generated))
+}
+
+// ULAPrefixAt is ULAPrefix with the state file at path, for the webUI
+// (frfw.ipv6.ula_prefix needs no privilege: the file is world-readable).
+func ULAPrefixAt(path string, c *config.Config) *netip.Prefix {
+	generated, _ := readULAStateAt(path).Get("generated")
 	return render.ULAPrefix(c, validULA(generated))
 }
 

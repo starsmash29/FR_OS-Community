@@ -68,6 +68,12 @@ RANDOM_BYTES = 1 << 14
 APPLY_SOCKET = "apply.sock"
 UPDATE_SOCKET = "update.sock"
 
+#: The TLS library the system screen names (pqc.ssl.OPENSSL_VERSION).
+TLS_LIBRARY = "Go crypto/tls (X25519MLKEM768)"
+
+#: What the integrity card says (the harness's integrity.check).
+INTEGRITY_NOTE = "FR_OS 2 keeps no list of its files' hashes yet"
+
 #: The router's CPUs, and its root file system (os.statvfs_result):
 #: 4 KiB blocks, 8 GiB, 6 GiB free.
 CPUS = 4
@@ -193,7 +199,7 @@ class _Fake:
 def webui(monkeypatch, tmp_path):
     from importlib import metadata
 
-    from frfw import integrity, pqc
+    from frfw import integrity, pqc, wireguard
     from frfw.webui import audit
 
     import test_fros_apply_cases as system
@@ -227,7 +233,19 @@ def webui(monkeypatch, tmp_path):
     # the host has no OpenSSH for the PQC status to ask.
     monkeypatch.setattr(pqc, "openssl_supports_hybrid_tls", lambda *a: True)
     monkeypatch.setattr(pqc, "shutil", SimpleNamespace(which=lambda *a, **k: None))
+    # The system screen names the TLS library: FR_OS 2's webUI uses Go's
+    # crypto/tls, not the host's OpenSSL (decisions.md, 3b-3).
+    monkeypatch.setattr(pqc.ssl, "OPENSSL_VERSION", TLS_LIBRARY)
     monkeypatch.setattr(integrity, "_cache", {})
+    # The system screen's integrity card: FR_OS 2 has no hash list of its
+    # files yet, so both say the same (decisions.md, 3b-3).
+    monkeypatch.setattr(integrity, "check", lambda **k: integrity.IntegrityReport(
+        0, verifiable=False, note=INTEGRITY_NOTE))
+    # A key pair the VPN screen makes: its private key from the stream.
+    real_x25519 = wireguard.X25519PrivateKey
+    monkeypatch.setattr(wireguard, "X25519PrivateKey", SimpleNamespace(
+        generate=lambda: real_x25519.from_private_bytes(state["fake"].bytes(32)),
+        from_private_bytes=real_x25519.from_private_bytes))
     monkeypatch.setattr(audit, "_writers", {})
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: state["system"].run(*a, **k))
     # The rules screen and the schedules read the wall clock through
@@ -248,6 +266,11 @@ def webui(monkeypatch, tmp_path):
         root = tmp_path / name.replace("/", "_")
         root.mkdir()
         system._reroot(monkeypatch, root)
+        # Mount points are as the kernel reports them in /proc/mounts,
+        # not files under the root: not moved.
+        from frfw import persistence
+        monkeypatch.setattr(persistence, "LIVE_MEDIUM_MOUNT", "/run/live/medium")
+        monkeypatch.setattr(persistence, "LIVE_PERSISTENCE_PREFIX", "/run/live/persistence/")
         state["system"] = system._Fake(root, programs, b"")
         state["fake"].system = state["system"]
         system._hook_fake[:] = [state["system"]]
@@ -882,6 +905,97 @@ def _ip_link(device: str, mode: int, name: str = "xdp_sni_filter") -> dict:
         "ifname": device, "xdp": {"mode": mode, "prog": {"id": 42, "name": name}}}])}
 
 
+# -- the ZTNA gate, the VPN and the system screen (phase 3b-3) -------------------
+
+
+def _scrypt_hash(password: str, salt: bytes) -> str:
+    """admin_account.hash_password's format, with a salt of the case's own."""
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**15, r=8, p=3, maxmem=256 * 1024 * 1024, dklen=32)
+    return f"scrypt$32768$8$3${salt.hex()}${digest.hex()}"
+
+
+def _pbkdf2_hash(password: str, salt: bytes) -> str:
+    """A hash written before security-lessons G2: replaced on sign-in."""
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return f"pbkdf2_sha256$200000${salt.hex()}${digest.hex()}"
+
+
+ALICE = ("alice", "Alice-pass-123")
+BOB = ("bob", "Bob-legacy-456")
+
+ZTNA_CONFIG = CONFIG + f"""\
+- name: ssh-gated
+  action: accept
+  from_zone: lan
+  to_zone: self
+  proto: tcp
+  dst_port: 22
+  require_ztna: true
+ztna:
+  enabled: true
+  session_ttl_seconds: 7260
+  users:
+  - username: alice
+    password_hash: {_scrypt_hash(ALICE[1], bytes(range(16)))}
+  - username: bob
+    password_hash: {_pbkdf2_hash(BOB[1], bytes(range(16, 32)))}
+"""
+
+PHONE_KEY = "Q" * 43 + "="
+LAPTOP_KEY = "M" * 43 + "="
+ROUTER_KEY = "R" * 43 + "="
+
+VPN_CONFIG = """\
+version: 1
+hostname: fr-router
+interfaces:
+  wan:
+    device: eth0
+    zone: wan
+  lan:
+    device: eth1
+    zone: lan
+    address: 192.168.1.1/24
+zones:
+  wan: {}
+  lan: {}
+  vpn: {}
+nat:
+  masquerade:
+  - out_zone: wan
+rules:
+- name: lan-to-wan
+  action: accept
+  from_zone: lan
+  to_zone: wan
+wireguard:
+  enabled: true
+  address: 10.99.0.1/24
+  listen_port: 51821
+  endpoint: vpn.example.net
+  zone: vpn
+  peers:
+  - name: phone
+    public_key: %s
+    address: 10.99.0.2/32
+    dual_stack: true
+  - name: laptop
+    public_key: %s
+    address: 10.99.0.3/32
+""" % (PHONE_KEY, LAPTOP_KEY)
+
+ULA_STATE = json.dumps({"generated": "fd12:3456:789a::/48"})
+
+WG_UP = {"ok": True, "public_key": ROUTER_KEY, "up": True, "peers": {
+    PHONE_KEY: {"latest_handshake": int(NOW) - 300, "endpoint": "203.0.113.5:40000"},
+    LAPTOP_KEY: {"latest_handshake": 0}}}
+
+#: A certificate file for the system screen's fingerprint and download
+#: (any base64 between the markers: only its bytes are hashed).
+CERT_PEM = ("-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(bytes(range(256)) * 2).decode()
+            + "-----END CERTIFICATE-----\n")
+
+
 SESSIONS = {
     # -- signing in ------------------------------------------------------------------
     "login/form-no-account": ({"accounts": [], "files": {"etc/fr_os/config.yaml": None}}, [{"get": "/login"}, {"get": "/"}]),
@@ -1341,6 +1455,124 @@ SESSIONS = {
     "xdp/off": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG}}, [
         *_login(), {"get": "/xdp"}, {"post": "/xdp/blocklist/remove", "form": {"domain": "x.example"}},
         {"get": "/xdp"}]),
+    # -- the ZTNA gate ------------------------------------------------------------------
+    "ztna/admin": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": ZTNA_CONFIG}}, [
+        *_login(), {"get": "/ztna"}, {"get": "/ztna?success=ok"},
+        {"post": "/ztna/settings", "form": {"enabled": "true", "session_ttl_seconds": "3600"}},
+        {"post": "/ztna/settings", "form": {"session_ttl_seconds": "59"}},
+        {"post": "/ztna/settings", "form": {"session_ttl_seconds": "x"}},
+        {"post": "/ztna/users/add", "form": {"new_username": "carol", "new_password": "short"}},
+        {"post": "/ztna/users/add", "form": {"new_username": "carol", "new_password": "Strong-pass-789x"}},
+        {"post": "/ztna/users/add", "form": {"new_username": "alice", "new_password": "New-secret-pass-1"}},
+        {"post": "/ztna/users/add", "form": {"new_username": "bad name!", "new_password": "Some-good-pass-2"}},
+        {"post": "/ztna/users/remove/bob"}, {"post": "/ztna/users/remove/nobody"},
+        {"get": "/ztna"}]),
+    "ztna/gate": ({"files": {"etc/fr_os/config.yaml": ZTNA_CONFIG}}, [
+        {"get": "/ztna/login"}, {"get": "/ztna/login?error=Bad+%3Cthing%3E"},
+        {"post": "/ztna/login", "form": {"username": "nobody", "password": "x"}, "csrf": None},
+        {"post": "/ztna/login", "form": {"username": ALICE[0], "password": "wrong"}, "csrf": None},
+        {"post": "/ztna/login", "form": {"username": ALICE[0], "password": ALICE[1]}, "csrf": None},
+        {"post": "/ztna/login", "form": {"username": BOB[0], "password": BOB[1]}, "csrf": None},
+        {"post": "/ztna/login", "form": {"username": ALICE[0], "password": ALICE[1]}, "csrf": None},
+        {"post": "/ztna/login", "form": {"username": ALICE[0]}, "csrf": None},
+        {"get": "/ztna/status?success=Welcome"}, {"get": "/ztna/status"}, {"get": "/ztna/status"},
+        {"get": "/ztna/status?error=x"}, {"get": "/ztna/status"}, {"get": "/ztna"}],
+        [{"cmd": "authorize_ztna", "reply": {"ok": True, "message": "authorized"}, "times": 1},
+         {"cmd": "authorize_ztna", "reply": {"ok": False, "message": "not a direct client"}, "times": 1},
+         {"cmd": "authorize_ztna", "reply": {"ok": False}, "times": 1},
+         {"cmd": "ztna_status", "reply": {"ok": True, "authorized": True, "username": "alice",
+                                          "expires_in": 7199, "mac": "aa:bb:cc:dd:ee:01", "direct": True}, "times": 1},
+         {"cmd": "ztna_status", "reply": {"ok": True, "authorized": True, "expires_in": 59, "mac": ""}, "times": 1},
+         {"cmd": "ztna_status", "reply": {"ok": True, "authorized": False, "direct": False}, "times": 1},
+         {"cmd": "ztna_status", "reply": {"ok": False, "message": "no set"}, "times": 1},
+         {"cmd": "ztna_status", "error": True}]),
+    "ztna/lockout": ({"files": {"etc/fr_os/config.yaml": ZTNA_CONFIG}}, [
+        *[{"post": "/ztna/login", "form": {"username": ALICE[0], "password": f"wrong-{i}"}, "csrf": None}
+          for i in range(10)],
+        {"post": "/ztna/login", "form": {"username": ALICE[0], "password": ALICE[1]}, "csrf": None}]),
+    "ztna/off": ({"accounts": [ADMIN]}, [
+        {"post": "/ztna/login", "form": {"username": "a", "password": "b"}, "csrf": None},
+        *_login(), {"get": "/ztna"}, {"post": "/ztna/settings", "form": {}},
+        {"post": "/ztna/users/remove/a"}, {"get": "/ztna"}]),
+    # -- the VPN ----------------------------------------------------------------------
+    "vpn/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": VPN_CONFIG, "etc/fr_os/ipv6_ula.json": ULA_STATE}}, [
+        *_login(), {"get": "/vpn"},
+        {"post": "/vpn/peers/add", "form": {"name": " tablet ", "public_key": " " + "U" * 43 + "= "}},
+        {"post": "/vpn/peers/add", "form": {"name": "watch", "full_tunnel": "true"}},
+        {"post": "/vpn/peers/add", "form": {"name": "pc"}},
+        {"post": "/vpn/peers/add", "form": {"name": "bad", "public_key": "nope"}},
+        {"post": "/vpn/peers/remove/laptop"}, {"post": "/vpn/peers/remove/nobody"},
+        {"post": "/vpn/settings", "form": {"enabled": "true", "address": " 10.99.0.1/24 ", "listen_port": "51822",
+                                           "endpoint": " 198.51.100.7 "}},
+        {"get": "/vpn"}],
+        [{"cmd": "wireguard_status", "reply": WG_UP}]),
+    "vpn/off": ({"accounts": [ADMIN]}, [
+        *_login(), {"get": "/vpn"}, {"post": "/vpn/peers/add", "form": {"name": "phone"}},
+        {"post": "/vpn/settings", "form": {"enabled": "true"}},
+        {"post": "/vpn/settings", "form": {"enabled": "true", "listen_port": "51820"}},
+        {"post": "/vpn/peers/add", "form": {"name": "phone"}},
+        {"post": "/vpn/settings", "form": {"listen_port": "0"}},
+        {"post": "/vpn/settings", "form": {}},
+        {"get": "/vpn"}]),
+    "vpn/no-key": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": VPN_CONFIG}}, [
+        *_login(), {"post": "/vpn/peers/add", "form": {"name": "pc"}},
+        {"post": "/vpn/peers/add", "form": {"name": "pc"}}, {"get": "/vpn"}],
+        [{"cmd": "wireguard_status", "reply": {"ok": False, "message": "wg0 is down"}, "times": 1},
+         {"cmd": "wireguard_status", "reply": {"ok": True, "up": False, "peers": {}}, "times": 1},
+         {"cmd": "wireguard_status", "error": True}]),
+    "vpn/full": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": VPN_CONFIG.replace(
+        "10.99.0.1/24", "10.99.0.1/30").replace("""  - name: laptop
+    public_key: %s
+    address: 10.99.0.3/32
+""" % LAPTOP_KEY, "")}}, [
+        *_login(), {"post": "/vpn/peers/add", "form": {"name": "pc", "public_key": LAPTOP_KEY}}, {"get": "/vpn"}]),
+    "vpn/invalid": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": VPN_CONFIG.replace(
+        "zone: vpn\n  peers", "zone: nowhere\n  peers")}}, [
+        *_login(), {"get": "/vpn"}, {"post": "/vpn/peers/add", "form": {"name": "pc"}}]),
+    # -- the system screen ------------------------------------------------------------
+    "system/show": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG + "metrics:\n  site: hq\n  token_sha256: " + "ab" * 32 + "\n",
+        "etc/fr_os/webui/cert.pem": CERT_PEM}}, [
+        *_login(), {"get": "/system"},
+        {"post": "/system/pqc/settings", "form": {"enabled": "true"}},
+        {"post": "/system/management", "form": {"allow_wan": "true"}},
+        {"get": "/system"},
+        {"post": "/system/management", "form": {}},
+        {"post": "/system/management-ipv6", "form": {"ipv6": "true"}},
+        {"post": "/system/management-ipv6", "form": {}},
+        {"post": "/system/management-addresses", "form": {}},
+        {"post": "/system/management-addresses", "form": {"addresses": ["192.168.1.1", "10.0.0.1"]}},
+        {"post": "/system/management-addresses", "form": {"addresses": ["192.168.1.1"]}},
+        {"post": "/system/management-addresses", "form": {"addresses": ["192.168.1.1"]}},
+        {"post": "/system/metrics/site", "form": {"site": " branch-2 "}},
+        {"post": "/system/metrics/site", "form": {"site": "Bad Site"}},
+        {"post": "/system/metrics/site", "form": {}},
+        {"post": "/system/metrics/token", "form": {"action": "generate"}},
+        {"post": "/system/metrics/token", "form": {"action": "disable"}},
+        {"post": "/system/metrics/token", "form": {"action": "other"}},
+        {"get": "/system/cert.pem"}, {"get": "/system"}],
+        [{"cmd": "set_management_addresses", "reply": {"ok": True, "message": "Moved: confirm within 120 s"}, "times": 1},
+         {"cmd": "set_management_addresses", "reply": {"ok": False, "message": "not an address of this router"},
+          "times": 1},
+         {"cmd": "set_management_addresses", "reply": {"ok": False}}]),
+    "system/vpn": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": VPN_CONFIG + "management:\n  allow_wan: true\n  addresses: [192.168.1.1, 10.99.0.1]\n",
+        "etc/fr_os/webui/cert.pem": "-----BEGIN CERTIFICATE-----\n!!\n-----END CERTIFICATE-----\n",
+        "proc/cmdline": "BOOT_IMAGE=/live/vmlinuz boot=live persistence quiet\n",
+        "proc/mounts": "/dev/sdb1 /run/live/medium iso9660 ro 0 0\n/dev/sdb3 /run/live/persistence/sdb3 ext4 rw 0 0\n"
+                       "/dev/sdc1 /run/live/persistence/sdc1 ext4 rw 0 0\n"}}, [
+        *_login(), {"get": "/system"}, {"get": "/system/cert.pem"},
+        {"post": "/system/management-ipv6", "form": {"ipv6": "true"}}]),
+    "system/live": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": VPN_CONFIG.replace("wireguard:\n  enabled: true", "wireguard:\n  enabled: true"),
+        "proc/cmdline": "BOOT_IMAGE=/live/vmlinuz boot=live quiet\n",
+        "proc/mounts": "/dev/sdb1 /run/live/medium iso9660 ro 0 0\n"}}, [
+        *_login(), {"get": "/system"}]),
+    "system/invalid": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG.replace("version: 1", "version: 2") + "pqc:\n  enabled: true\n"}}, [
+        *_login(), {"get": "/system"}, {"get": "/system/cert.pem"},
+        {"post": "/system/metrics/token", "form": {"action": "generate"}}]),
     # -- the dashboard's buttons -----------------------------------------------------
     "dashboard/apply": ({"accounts": [ADMIN]}, [
         *_login(), {"post": "/apply?dry_run=1"}, {"post": "/apply"}, {"get": "/"}],
