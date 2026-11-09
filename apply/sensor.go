@@ -150,33 +150,63 @@ const maxAuditBytes = 1 << 20
 // (security-lessons G9). Auditing never breaks what it describes: a
 // failure is dropped.
 func (s *System) Alert(message, user, client string) {
-	path := s.Paths.AuditLog
-	if !exists(path) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			return
-		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640)
-		if err != nil {
-			return
-		}
-		f.Close()
-		if s.root() {
-			if gid, ok := groupOf(WebUIUser); ok {
-				s.Chown(filepath.Dir(path), 0, gid)
-				s.Chown(path, 0, gid)
-			}
-		}
+	if s.PrepareAudit() != nil {
+		return
 	}
 	entry := config.NewMap()
 	entry.Set("alert", message)
 	entry.Set("client", client)
-	entry.Set("ts", NowSeconds(s.Now()))
 	entry.Set("user", user)
-	line, err := config.PyJSON(entry, -1, true)
+	s.AppendAudit(entry)
+}
+
+// PrepareAudit creates the root-owned activity log the way it must be:
+// its directory 0750 and the file 0640, group fr_os-webui (the webUI,
+// which reads it), never briefly world-readable. Nothing once it exists.
+func (s *System) PrepareAudit() error {
+	path := s.Paths.AuditLog
+	if exists(path) {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o777); err != nil {
+		return err
+	}
+	if err := os.Mkdir(dir, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	if s.root() {
+		if gid, ok := groupOf(WebUIUser); ok {
+			s.Chown(dir, 0, gid)
+			s.Chown(path, 0, gid)
+		}
+	}
+	return nil
+}
+
+// AppendAudit appends entry, stamped with the time, as one JSON line
+// (sorted keys), rotating the log to ".1" past maxAuditBytes. A failure
+// is dropped: auditing never breaks the request it describes.
+func (s *System) AppendAudit(entry *config.Map) {
+	path := s.Paths.AuditLog
+	stamped := config.NewMap()
+	stamped.Set("ts", NowSeconds(s.Now()))
+	for i, k := range entry.Keys() {
+		stamped.SetKey(k, entry.Values()[i])
+	}
+	line, err := config.PyJSON(stamped, -1, true)
 	if err != nil {
 		return
 	}
 	line += "\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+		return
+	}
 	if st, err := os.Stat(path); err == nil && st.Size()+int64(len(line)) > maxAuditBytes {
 		if os.Rename(path, path+".1") != nil {
 			return

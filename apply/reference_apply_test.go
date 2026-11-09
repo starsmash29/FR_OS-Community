@@ -212,12 +212,34 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 			}
 		default:
 			text := marshal(t, got, err)
-			if !sameJSON(t, f.norm(text), string(step.Reply)) {
+			if !sameJSON(t, f.norm(text), string(step.Reply)) && !samePythonJSONError(text, string(step.Reply)) {
 				t.Errorf("%s:\n%s", where, replyDiff(f.norm(text), string(step.Reply)))
 			}
 		}
 	}
 	checkTree(t, f, snapshot(t, f, root), c.Files)
+}
+
+// pythonJSONError is a message quoting Python's json error, which 2.x
+// words its own way after the same prefix (decisions.md, "the helper's
+// requests").
+var pythonJSONError = regexp.MustCompile(`^(could not parse ip neigh output: ).*: line \d+ column \d+ \(char \d+\)$`)
+
+func samePythonJSONError(got, want string) bool {
+	msg := func(text string) (string, bool) {
+		v, _ := config.ParseJSON([]byte(text))
+		m, _ := v.(*config.Map)
+		if m == nil {
+			return "", false
+		}
+		s, _ := m.Get("message")
+		str, _ := s.(string)
+		return str, okOf(text)
+	}
+	gm, gok := msg(got)
+	wm, wok := msg(want)
+	m := pythonJSONError.FindStringSubmatch(wm)
+	return m != nil && !gok && !wok && strings.HasPrefix(gm, m[1])
 }
 
 func waitOf(t *testing.T, request jsontext.Value) (float64, bool) {

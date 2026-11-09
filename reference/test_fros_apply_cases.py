@@ -4,7 +4,10 @@ render module, so it sees every config the run accepted).
 
 Each case is a short session with 1.x's apply-helper request handler
 (frfw.helper.server._handle_request): an apply, a dry run, an apply held
-for confirmation and then confirmed or reverted, a rollback, a save.
+for confirmation and then confirmed or reverted, a rollback, a save; or
+the commands that act on one host, with the neighbour table and nft
+answering from the case's table (a ban, a quarantine, a ZTNA sign-in,
+IoT isolation, the conntrack sample, an activity-log entry).
 Nothing is run and nothing outside the case's own directory is touched:
 
 - every absolute path 1.x's modules hold (module constants and the
@@ -353,6 +356,9 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
     server = types.SimpleNamespace(
         config_path=root / "etc/fr_os/config.yaml", backup_dir=root / "etc/fr_os/backups",
         kea_config_path=root / "etc/kea/kea-dhcp4.conf", sensor_config_path=root / "etc/fr_os/sensor-config.yaml",
+        ztna_state_path=root / "etc/fr_os/ztna_state.json", audit_log_path=root / "var/log/fr_os/audit.log",
+        kea_leases_path=root / "var/lib/kea/kea-leases4.csv", adblock_hosts_path=root / "etc/fr_os/adblock.hosts",
+        adblock_category_dir=root / "etc/fr_os/adblock.d",
         peer_policy=PeerPolicy(frozenset({0}), frozenset()))
     steps = []
     _hook_fake[:] = [fake]
@@ -671,3 +677,254 @@ def test_hybrid_pqc(system):
 def test_failure(system, name):
     _session(system, f"failure/{name}", _tree(RICH2, RICH), [{"cmd": "apply", "confirm": True}],
              FAILURES[name] + [RUNNING] + _links(RICH2), RANDOM)
+
+
+# --- the commands that act on one host (phase 2c-1) ---------------------------------
+#
+# The brute-force jail, the IDS quarantine, ZTNA's sign-in, IoT isolation,
+# the conntrack sample and the activity log: each with the neighbour
+# table, nft and the files they read answering from the case's table.
+
+HOSTS = """\
+version: 1
+hostname: fr-router
+interfaces:
+  wan: {device: eth0, zone: wan, address: 203.0.113.2/24}
+  lan: {device: eth1, zone: lan, address: 10.0.0.1/24}
+  iot: {device: eth2, zone: iot, address: 10.0.2.1/24}
+zones: {wan: {}, lan: {}, iot: {}, vpn: {}}
+rules:
+  - {name: lan-to-wan, action: accept, from_zone: lan, to_zone: wan}
+  - {name: iot-to-wan, action: accept, from_zone: iot, to_zone: wan}
+nat: {masquerade: [{out_zone: wan}]}
+ipv6: {enabled: true, lan_zones: [lan], ula_prefix: "fd12:3456:789a::/48"}
+wireguard:
+  enabled: true
+  address: 10.9.0.1/24
+  listen_port: 51820
+  peers: [{name: phone, public_key: "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", address: 10.9.0.2}]
+ztna:
+  enabled: true
+  session_ttl_seconds: 900
+  users: [{username: kid, password_hash: "$argon2id$v=19$x"}]
+iot: {enabled: true, zones: [iot], trusted_macs: ["aa:bb:cc:00:00:01"]}
+"""
+
+MAC = "aa:bb:cc:dd:ee:01"
+
+
+def _neigh(dst, dev="eth1", lladdr="AA:BB:CC:DD:EE:01", state=("REACHABLE",)):
+    entry = {"dst": dst, "dev": dev, "lladdr": lladdr}
+    if state is not None:
+        entry["state"] = list(state) if isinstance(state, tuple) else state
+    return entry
+
+
+def _answer(argv, entries) -> dict:
+    return {"argv": argv, "stdout": json.dumps(entries)}
+
+
+#: The router's neighbour table, as each lookup asks for it.
+NEIGH = [
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::50"],
+            [_neigh("fd12:3456:789a::49"), _neigh("fd12:3456:789A::50")]),
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::60"], [_neigh("fd12:3456:789a::60", "eth0")]),
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::70"], [_neigh("fd12:3456:789a::70", state="STALE")]),
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::80"],
+            [_neigh("fd12:3456:789a::80", state=("FAILED",)), _neigh("fd12:3456:789a::80", lladdr="zz", state=("STALE",)),
+             _neigh("fd12:3456:789a::80", lladdr="AA:BB:CC:DD:EE:08", state=("PERMANENT", "x"))]),
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::90"], [_neigh("fd12:3456:789a::90", state=None)]),
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::91"], [_neigh("fd12:3456:789a::91", state=5)]),
+    _answer(["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::92"],
+            [{"dst": "fd12:3456:789a::92", "dev": ["eth1"], "lladdr": MAC, "state": ["REACHABLE"]}]),
+    {"argv": ["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::93"], "rc": 1, "stderr": "bad\n"},
+    {"argv": ["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::94"], "stdout": "{not json"},
+    {"argv": ["ip", "-j", "-6", "neigh", "show", "to", "fd12:3456:789a::95"], "error": "timeout"},
+    _answer(["ip", "-j", "-4", "neigh", "show", "to", "10.0.0.50"], [_neigh("10.0.0.50")]),
+    _answer(["ip", "-j", "-4", "neigh", "show", "to", "203.0.113.9"], [_neigh("203.0.113.9", "eth0")]),
+    _answer(["ip", "-j", "-4", "neigh", "show"],
+            [_neigh("10.0.0.52"), _neigh("10.0.0.50"), _neigh("10.0.0.1"), _neigh("203.0.113.5", "eth0"),
+             _neigh("10.0.0.53", state=("FAILED",)), _neigh("10.0.0.54", lladdr="aa:bb:cc:dd:ee:02"),
+             _neigh("not an address"), _neigh(167772215)]),
+    _answer(["ip", "-j", "-6", "neigh", "show"],
+            [_neigh("fd12:3456:789a::50"), _neigh("fe80::1%eth1", lladdr="aa:bb:cc:dd:ee:03"),
+             _neigh("2001:db8::9", "eth0", lladdr="aa:bb:cc:dd:ee:04"), _neigh("FD12:3456:789A::51", lladdr="aa:bb:cc:dd:ee:05")]),
+    # ZTNA's own reads (frfw.ztna): no family, NOARP counts.
+    _answer(["ip", "-j", "neigh", "show", "to", "10.0.0.50"], [_neigh("10.0.0.50")]),
+    _answer(["ip", "-j", "neigh", "show", "to", "10.0.0.51"], [_neigh("10.0.0.51", lladdr="aa:bb:cc:dd:ee:51", state=("NOARP",))]),
+    _answer(["ip", "-j", "neigh", "show", "to", "10.0.0.56"], [_neigh("10.0.0.56", dev="-x")]),
+    _answer(["ip", "-j", "neigh", "show", "to", "fd12:3456:789a::50"], [_neigh("fd12:3456:789a::50", state=("DELAY",))]),
+    _answer(["ip", "-j", "neigh", "show", "dev", "eth1"],
+            [_neigh("10.0.0.50"), _neigh("fd12:3456:789a::50"), _neigh("fe80::a"), _neigh("ff02::1"),
+             _neigh("10.0.0.77", lladdr="aa:bb:cc:dd:ee:77"), _neigh("10.0.0.50"), _neigh("fd12:3456:789a::51", state=("FAILED",)),
+             _neigh("::ffff:169.254.0.1"), _neigh("0.0.0.0"), _neigh("10.0.0.57", lladdr=None), "x"]),
+]
+
+
+def _set(name, elems) -> dict:
+    return {"argv": ["nft", "-j", "--", "list", "set", "inet", "fr_os", name],
+            "stdout": json.dumps({"nftables": [{"metainfo": {}}, {"set": {"name": name, "elem": elems}}]})}
+
+
+ZTNA_SETS = [
+    _set("authenticated_ztna_users", [{"elem": {"val": {"concat": ["10.0.0.50", "AA:BB:CC:DD:EE:01"]}, "expires": 800}},
+                                      {"elem": {"val": "10.0.0.51", "expires": 5}}]),
+    _set("authenticated_ztna_tunnel", [{"elem": {"val": "10.9.0.2", "expires": 700}}]),
+    _set("authenticated_ztna_users6", [{"elem": {"val": {"concat": ["fd12:3456:789a::50", MAC]}, "expires": 600}}]),
+]
+
+
+def _cmd(cmd, **fields) -> dict:
+    return {"cmd": cmd, **fields}
+
+
+CONNTRACK = (
+    "ipv4     2 tcp      6 431999 ESTABLISHED src=10.0.0.50 dst=93.184.216.34 sport=51000 dport=443 "
+    "src=93.184.216.34 dst=203.0.113.2 sport=443 dport=51000 [ASSURED] mark=0 zone=0 use=2\n"
+    "ipv4     2 udp      17 29 src=10.0.0.52 dst=9.9.9.9 sport=40000 dport=53 src=9.9.9.9 dst=203.0.113.2 "
+    "sport=53 dport=40000 mark=0 use=1\n"
+    "ipv4     2 icmp     1 29 src=10.0.0.50 dst=1.1.1.1 type=8 code=0 id=5 src=1.1.1.1 dst=203.0.113.2 type=0\n"
+    "ipv6     10 tcp      6 300 ESTABLISHED src=fd12:3456:789a::50 dst=2001:db8::1 sport=50001 dport=443 "
+    "src=2001:db8::1 dst=fd12:3456:789a::50 sport=443 dport=50001 [ASSURED] use=1\n"
+    "ipv6     10 udp      17 30 src=fd12:3456:789A::51 dst=2001:db8::1 sport=x dport=53 src=2001:db8::1 "
+    "dst=fd12:3456:789a::51 sport=53 dport=+0_9 use=1\n"
+    "ipv6     10 tcp      6 300 ESTABLISHED src=2001:db8::99 dst=fd12:3456:789a::50 sport=1 dport=22 use=1\n"
+    "ipv6     10 tcp      6 300 src=fe80::1%eth1 dst=fe80::2 sport=1 dport=2 use=1\n"
+    "ipv6     10 tcp      6 300 src=bogus:: dst=fe80::2 sport=1 dport=2 use=1\n"
+    "ipv4 2 tcp\n"
+    "short line\n"
+    "ipv4     2 tcp      6 1 src=1.2.3.4 dst=5.6.7.8 sport=1\n"
+)
+
+COMMAND_SESSIONS = {
+    "ban": (_tree(HOSTS), [
+        _cmd("ban_ip"), _cmd("ban_ip", ip=5), _cmd("ban_ip", ip=""), _cmd("ban_ip", ip="10.0.0.9", duration_seconds="x"),
+        _cmd("ban_ip", ip="10.0.0.9", duration_seconds=True), _cmd("ban_ip", ip="10.0.0.9", duration_seconds=None),
+        _cmd("ban_ip", ip="nonsense"), _cmd("ban_ip", ip="fe80::1%eth1"), _cmd("ban_ip", ip="10.0.0.9", duration_seconds=0),
+        _cmd("ban_ip", ip="10.0.0.9", duration_seconds=-5), _cmd("ban_ip", ip="::ffff:10.0.0.9"), _cmd("ban_ip", ip="10.0.0.9"),
+        _cmd("ban_ip", ip="10.0.0.9", duration_seconds=10 ** 20), _cmd("ban_ip", ip="fd12:3456:789a::50", duration_seconds=60),
+        _cmd("ban_ip", ip="FD12:3456:789A::50"), _cmd("ban_ip", ip="2001:db8::7"), _cmd("ban_ip", ip="fd12:3456:789a::60"),
+        _cmd("ban_ip", ip="fd12:3456:789a::70"), _cmd("ban_ip", ip="fd12:3456:789a::80"),
+        _cmd("ban_ip", ip="fd12:3456:789a::90"), _cmd("ban_ip", ip="fd12:3456:789a::91"),
+        _cmd("ban_ip", ip="fd12:3456:789a::92"), _cmd("ban_ip", ip="fd12:3456:789a::93"),
+        _cmd("ban_ip", ip="fd12:3456:789a::94"), _cmd("ban_ip", ip="fd12:3456:789a::95"),
+        _cmd("source_device"), _cmd("source_device", ip=["x"]), _cmd("source_device", ip="x"),
+        _cmd("source_device", ip="10.0.0.9"), _cmd("source_device", ip="fd12:3456:789a::50"),
+        _cmd("source_device", ip="fd12::1%x"), _cmd("source_device", ip="::ffff:1.2.3.4"),
+        _cmd("source_device", ip="fd12:3456:789a::60"),
+    ], NEIGH),
+    "ban, nft refuses": (_tree(HOSTS), [_cmd("ban_ip", ip="10.0.0.9"), _cmd("ban_ip", ip="10.0.0.10")], [
+        {"argv": ["nft", "--", "add", "element", "inet", "fr_os", "bruteforce_jail", "{", "10.0.0.9 timeout 3600s"],
+         "rc": 1, "stderr": "Error: No such file or directory; did you mean set 'x'?\n"},
+        {"argv": ["nft", "--", "add"], "rc": 1, "stderr": ""}]),
+    "ban, no nft": (_tree(HOSTS), [_cmd("ban_ip", ip="10.0.0.9"), _cmd("quarantine_ip", ip="10.0.0.9"),
+                                   _cmd("authorize_ztna", ip="10.9.0.2", username="kid"),
+                                   _cmd("ztna_status", ip="10.9.0.2")], [{"argv": ["nft"], "error": "missing"}]),
+    "ban, no config": ({}, [_cmd("ban_ip", ip="fd12:3456:789a::50"), _cmd("source_device", ip="fd12:3456:789a::50"),
+                            _cmd("quarantine_ip", ip="10.0.0.1"), _cmd("quarantine_ip", ip="fd12:3456:789a::50"),
+                            _cmd("conntrack_sample"), _cmd("authorize_ztna", ip="10.0.0.50", username="kid"),
+                            _cmd("ztna_status", ip="10.0.0.50"), _cmd("iot_sync_isolation", macs=[])], NEIGH),
+    "quarantine": (_tree(HOSTS), [
+        _cmd("quarantine_ip"), _cmd("quarantine_ip", ip="10.0.0.50"), _cmd("quarantine_ip", ip="10.0.0.51"),
+        _cmd("quarantine_ip", ip="203.0.113.9", duration_seconds=60), *[
+            _cmd("quarantine_ip", ip=ip) for ip in (
+                "10.0.0.1", "127.0.0.1", "0.0.0.0", "224.0.0.1", "169.254.1.1", "240.0.0.1", "255.255.255.255", "::1",
+                "::", "fe80::1", "ff02::1", "::ffff:10.0.0.50", "10.0.0.5%x", "fd12::1%eth1", "x", "1:2", "10.9.0.1",
+                "203.0.113.2", "010.0.0.5", "1.2.3", "2001:db8::/64", "fd12:3456:789a::61", "fd12:3456:789a::93",
+                "200::1", "4000::1")],
+        _cmd("quarantine_ip", ip="10.0.0.60", duration_seconds=0), _cmd("quarantine_ip", ip="10.0.0.60", duration_seconds=604801),
+        _cmd("quarantine_ip", ip="10.0.0.60", duration_seconds=604800), _cmd("quarantine_ip", ip="10.0.0.60", duration_seconds="1"),
+        _cmd("quarantine_ip", ip="fd12:3456:789a::50", duration_seconds=120),
+        _cmd("quarantine_ip", ip="FD12:3456:789A::50"),
+    ], NEIGH),
+    "quarantine, nft refuses": (_tree(HOSTS), [_cmd("quarantine_ip", ip="10.0.0.50"),
+                                               _cmd("quarantine_ip", ip="fd12:3456:789a::50")], NEIGH + [
+        {"argv": ["nft", "--", "add", "element", "inet", "fr_os", "ids_quarantine_mac"], "rc": 1, "stderr": "Error: x\n"}]),
+    "conntrack": (_tree(HOSTS, None, **{"proc/net/nf_conntrack": CONNTRACK}), [_cmd("conntrack_sample")], NEIGH),
+    "conntrack, IPv4 only": (_tree(HOSTS, None, **{"proc/net/nf_conntrack": CONNTRACK.split("ipv6")[0]}),
+                             [_cmd("conntrack_sample")], NEIGH),
+    "conntrack, none": (_tree(HOSTS), [_cmd("conntrack_sample")], NEIGH),
+    "conntrack, unreadable": (_tree(HOSTS, None, **{"proc/net/nf_conntrack/": ""}), [_cmd("conntrack_sample")], NEIGH),
+    "ztna": (_tree(HOSTS), [
+        _cmd("authorize_ztna"), _cmd("authorize_ztna", ip="10.0.0.50"), _cmd("authorize_ztna", ip="10.0.0.50", username=""),
+        _cmd("authorize_ztna", ip="x", username="kid"), _cmd("authorize_ztna", ip="fd12::1%eth1", username="kid"),
+        _cmd("authorize_ztna", ip="10.0.0.50", username="nobody"),
+        _cmd("ztna_status", ip="10.0.0.50"),
+        _cmd("authorize_ztna", ip="10.0.0.50", username="kid"),
+        _cmd("authorize_ztna", ip="10.9.0.2", username="kid", extra=1),
+        _cmd("authorize_ztna", ip="fd12:3456:789a:ffff::3", username="kid"),
+        _cmd("authorize_ztna", ip="fd12:3456:789a:ffff::", username="kid"),
+        _cmd("authorize_ztna", ip="fd12:3456:789a:ffff:0:1:0:0", username="kid"),
+        _cmd("authorize_ztna", ip="10.9.0.255", username="kid"),
+        _cmd("authorize_ztna", ip="198.51.100.7", username="kid"),
+        _cmd("authorize_ztna", ip="FD12:3456:789A::50", username="kid"),
+        _cmd("authorize_ztna", ip="10.0.0.51", username="kid"),
+        _cmd("authorize_ztna", ip="10.0.0.56", username="kid"),
+        _cmd("authorize_ztna", ip="fd12:3456:789a::50", username="kid"),
+        _cmd("ztna_status"), _cmd("ztna_status", ip="x%y"), _cmd("ztna_status", ip="nope"),
+        _cmd("ztna_status", ip="10.0.0.50"), _cmd("ztna_status", ip="10.9.0.2"), _cmd("ztna_status", ip="10.0.0.51"),
+        _cmd("ztna_status", ip="198.51.100.7"), _cmd("ztna_status", ip="fd12:3456:789a::50"),
+        _cmd("ztna_status", ip="FD12:3456:789A::50"),
+    ], NEIGH + ZTNA_SETS),
+    "ztna, state file odd": (_tree(HOSTS, None, **{"etc/fr_os/ztna_state.json": '{"10.9.0.2": {"username": 7}, '
+                                                   '"10.0.0.50": "x", "z": 1, "z": 2}'}),
+                             [_cmd("ztna_status", ip="10.9.0.2"), _cmd("ztna_status", ip="10.0.0.50"),
+                              _cmd("authorize_ztna", ip="10.9.0.2", username="kid"), _cmd("ztna_status", ip="10.9.0.2")],
+                             NEIGH + ZTNA_SETS),
+    "ztna, state file not json": (_tree(HOSTS, None, **{"etc/fr_os/ztna_state.json": "{"}),
+                                  [_cmd("ztna_status", ip="10.9.0.2"), _cmd("authorize_ztna", ip="10.9.0.2", username="kid")],
+                                  NEIGH + ZTNA_SETS),
+    "ztna, state file a list": (_tree(HOSTS, None, **{"etc/fr_os/ztna_state.json": "[1]"}),
+                                [_cmd("ztna_status", ip="10.0.0.51"), _cmd("ztna_status", ip="10.9.0.2"),
+                                 _cmd("authorize_ztna", ip="10.9.0.2", username="kid")],
+                                NEIGH + ZTNA_SETS),
+    "ztna, neighbour table fails": (_tree(HOSTS), [
+        _cmd("authorize_ztna", ip="10.0.0.50", username="kid"), _cmd("ztna_status", ip="10.0.0.60"),
+        _cmd("authorize_ztna", ip="10.0.0.61", username="kid"), _cmd("authorize_ztna", ip="10.0.0.62", username="kid"),
+        _cmd("authorize_ztna", ip="10.0.0.63", username="kid")], [
+        {"argv": ["ip", "-j", "neigh", "show", "to", "10.0.0.50"], "rc": 1, "stderr": "Cannot open netlink\n"},
+        {"argv": ["ip", "-j", "neigh", "show", "to", "10.0.0.60"], "error": "missing"},
+        {"argv": ["ip", "-j", "neigh", "show", "to", "10.0.0.61"], "error": "timeout"},
+        {"argv": ["ip", "-j", "neigh", "show", "to", "10.0.0.62"], "stdout": "[{"},
+        {"argv": ["ip", "-j", "neigh", "show", "to", "10.0.0.63"], "rc": 2, "stderr": ""}]),
+    "ztna, disabled": (_tree(PLAIN), [_cmd("authorize_ztna", ip="10.0.0.50", username="kid"),
+                                      _cmd("ztna_status", ip="10.0.0.50")], NEIGH),
+    "ztna, no ULA yet": (_tree(HOSTS.replace(', ula_prefix: "fd12:3456:789a::/48"', "")),
+                         [_cmd("authorize_ztna", ip="10.9.0.2", username="kid")], NEIGH),
+    "ztna, generated ULA": (_tree(HOSTS.replace(', ula_prefix: "fd12:3456:789a::/48"', ""), None, **{
+        "etc/fr_os/ipv6_ula.json": '{"generated": "fd99:8877:6655::/48"}\n'}),
+        [_cmd("authorize_ztna", ip="10.9.0.2", username="kid"),
+         _cmd("authorize_ztna", ip="fd99:8877:6655:ffff::2", username="kid")], NEIGH),
+    "iot": (_tree(HOSTS), [
+        _cmd("iot_sync_isolation"), _cmd("iot_sync_isolation", macs="aa:bb:cc:00:00:02"),
+        _cmd("iot_sync_isolation", macs=[5]), _cmd("iot_sync_isolation", macs=["aa-bb-cc-00-00-02"]),
+        _cmd("iot_sync_isolation", macs=["AA:BB:CC:00:00:0G"]), _cmd("iot_sync_isolation", macs=["a"] * 4097),
+        _cmd("iot_sync_isolation", macs=["AA:BB:CC:00:00:01", "aa:bb:cc:00:00:02", "AA:BB:CC:00:00:02", "aa:bb:cc:00:00:03"]),
+        _cmd("iot_sync_isolation", macs=["aa:bb:cc:00:00:01"]), _cmd("iot_sync_isolation", macs=[]),
+        _cmd("iot_sync_isolation", macs=["aa:bb:cc:00:00:02\n"]),
+    ], []),
+    "iot, nft refuses": (_tree(HOSTS), [_cmd("iot_sync_isolation", macs=["aa:bb:cc:00:00:02"]),
+                                        _cmd("iot_sync_isolation", macs=[])],
+                         [{"argv": ["nft", "-f", "-"], "after": 1, "rc": 1, "stderr": ""},
+                          {"argv": ["nft", "-f", "-"], "rc": 1, "stderr": "Error: Could not process rule\n"}]),
+    "iot, no nft": (_tree(HOSTS), [_cmd("iot_sync_isolation", macs=["aa:bb:cc:00:00:02"])],
+                    [{"argv": ["nft"], "error": "missing"}]),
+    "iot, disabled": (_tree(PLAIN), [_cmd("iot_sync_isolation", macs=["aa:bb:cc:00:00:02"])], []),
+    "audit": (_tree(HOSTS), [
+        _cmd("audit_append"), _cmd("audit_append", entry=[1]), _cmd("audit_append", entry={f"k{i}": i for i in range(21)}),
+        _cmd("audit_append", entry={"ts": 1}), _cmd("audit_append", entry={"via": "x"}),
+        _cmd("audit_append", entry={"1x": 1}), _cmd("audit_append", entry={"a-b": 1}),
+        _cmd("audit_append", entry={"k" * 41: 1}), _cmd("audit_append", entry={"": 1}),
+        _cmd("audit_append", entry={"ok": [1]}), _cmd("audit_append", entry={"ok": {"a": 1}}),
+        _cmd("audit_append", entry={}),
+        _cmd("audit_append", entry={"action": "login", "user": "admin", "ok": True, "n": 5, "big": 10 ** 30, "f": 1.5,
+                                    "none": None, "long": "é" * 600, "név": "x", "_x": "tab\there", "k" * 40: 0.1}),
+        _cmd("audit_append", entry={f"k{i}": i for i in range(20)}),
+    ], []),
+}
+
+
+@pytest.mark.parametrize("name", sorted(COMMAND_SESSIONS))
+def test_command_session(system, name):
+    setup, requests, table = COMMAND_SESSIONS[name]
+    _session(system, f"command/{name}", setup, requests, table, RANDOM)

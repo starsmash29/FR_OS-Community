@@ -35,6 +35,10 @@ type Paths struct {
 	// IPForward is the IPv4 switch, ProcNet /proc/sys/net (the IPv6
 	// settings), NetClass /sys/class/net (which devices there are).
 	IPForward, ProcNet, NetClass string
+	// Conntrack is the kernel's connection-tracking table.
+	Conntrack string
+	// ZtnaState notes who signed in where (display only).
+	ZtnaState string
 	// The programs whose presence an apply checks by path.
 	DhcpcdBinary, RADnsmasqBinary string
 }
@@ -57,6 +61,7 @@ func DefaultPaths() Paths {
 		IPv6DhcpcdConf: "/etc/fr_os/dhcpcd6.conf", IPv6RAConf: "/etc/fr_os/dnsmasq_ra.conf",
 		IPv6ULAState: "/etc/fr_os/ipv6_ula.json", WireguardKey: "/etc/fr_os/wireguard/private.key",
 		IPForward: "/proc/sys/net/ipv4/ip_forward", ProcNet: "/proc/sys/net", NetClass: "/sys/class/net",
+		Conntrack: "/proc/net/nf_conntrack", ZtnaState: "/etc/fr_os/ztna_state.json",
 		DhcpcdBinary: "/usr/sbin/dhcpcd", RADnsmasqBinary: "/usr/sbin/dnsmasq",
 	}
 }

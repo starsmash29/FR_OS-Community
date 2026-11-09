@@ -314,6 +314,15 @@ type ztnaReply struct {
 // meant to hold counts: address . MAC pairs in the LAN sets, addresses in
 // the tunnel sets.
 func (s *Server) ztnaSessionsStatus() (any, error) {
+	sessions, err := s.ztnaSessions()
+	if err != nil {
+		return failed(err)
+	}
+	return ztnaReply{OK: true, Sessions: sessions, Count: len(sessions)}, nil
+}
+
+// ztnaSessions is frfw.ztna._list_elements.
+func (s *Server) ztnaSessions() ([]ztnaSession, error) {
 	sets := []struct {
 		name   string
 		paired bool
@@ -322,7 +331,7 @@ func (s *Server) ztnaSessionsStatus() (any, error) {
 	for _, set := range sets {
 		entries, err := s.setEntries(set.name)
 		if err != nil {
-			return failed(err)
+			return nil, err
 		}
 		for _, entry := range entries {
 			elem := elemOf(entry)
@@ -335,12 +344,12 @@ func (s *Server) ztnaSessionsStatus() (any, error) {
 			}
 			left, err := expiresOf(elem)
 			if err != nil {
-				return failed(err)
+				return nil, err
 			}
 			sessions = append(sessions, ztnaSession{ip, config.PyLower(mac), left})
 		}
 	}
-	return ztnaReply{OK: true, Sessions: sessions, Count: len(sessions)}, nil
+	return sessions, nil
 }
 
 func ztnaMember(elem *config.Map, paired bool) (ip, mac string, ok bool) {
