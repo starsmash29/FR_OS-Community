@@ -40,6 +40,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyotp
 import pytest
@@ -187,7 +188,7 @@ class _Fake:
 def webui(monkeypatch, tmp_path):
     from importlib import metadata
 
-    from frfw import integrity
+    from frfw import integrity, pqc
     from frfw.webui import audit
 
     import test_fros_apply_cases as system
@@ -217,6 +218,10 @@ def webui(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "uname", lambda: os.uname_result(UNAME))
     monkeypatch.setattr(os, "statvfs", lambda path: os.statvfs_result(DISK))
     monkeypatch.setattr(integrity.metadata, "distribution", no_distribution)
+    # The router's OpenSSL knows the hybrid group (Debian 13's 3.5), and
+    # the host has no OpenSSH for the PQC status to ask.
+    monkeypatch.setattr(pqc, "openssl_supports_hybrid_tls", lambda *a: True)
+    monkeypatch.setattr(pqc, "shutil", SimpleNamespace(which=lambda *a, **k: None))
     monkeypatch.setattr(integrity, "_cache", {})
     monkeypatch.setattr(audit, "_writers", {})
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: state["system"].run(*a, **k))
@@ -453,6 +458,203 @@ def _login(account=ADMIN) -> list:
 _KEY_ENROL = _Authenticator("enrol")
 _KEY_LOGIN = _Authenticator("login")
 
+#: A router with every protection on, for the dashboard: what each part
+#: shows, and what the rule check, the attack surface and the checklist
+#: find (an any-to-any rule, one open from the internet, a shadowed, a
+#: redundant, an expired and an unused one; a service nothing needs).
+FULL_CONFIG = """\
+version: 1
+hostname: edge-gw
+interfaces:
+  wan:
+    device: eth0
+    zone: wan
+  lan:
+    device: eth1
+    zone: lan
+    address: 192.168.1.1/24
+  iot:
+    device: eth2
+    zone: iot
+    address: 192.168.20.1/24
+zones:
+  wan: {}
+  lan: {}
+  iot: {}
+  vpn: {}
+nat:
+  masquerade:
+  - out_zone: wan
+  port_forwards:
+  - name: web
+    in_zone: wan
+    proto: tcp
+    dst_port: 8443
+    to_address: 192.168.1.10
+    to_port: 443
+dhcp:
+  lan:
+    range_start: 192.168.1.100
+    range_end: 192.168.1.200
+    dns_servers: [192.168.1.1]
+rules:
+- name: lan-to-wan
+  action: accept
+  from_zone: lan
+  to_zone: wan
+- name: lan-web
+  action: accept
+  from_zone: lan
+  to_zone: wan
+  proto: tcp
+  dst_port: 443
+- name: everything
+  action: accept
+- name: wan-in
+  action: accept
+  from_zone: wan
+  to_zone: lan
+- name: block-iot
+  action: drop
+  from_zone: iot
+  to_zone: wan
+  proto: tcp
+  dst_port: 443
+- name: old-temp
+  action: accept
+  from_zone: lan
+  to_zone: self
+  proto: tcp
+  dst_port: 8080
+  expires: "2026-10-01T00:00:00Z"
+- name: ssh-self
+  action: accept
+  from_zone: lan
+  to_zone: self
+  proto: tcp
+  dst_port: 22
+- name: admin-pc
+  action: accept
+  from_zone: lan
+  to_zone: self
+  src_address: [192.168.1.50]
+- name: db-from-iot
+  action: accept
+  from_zone: iot
+  to_zone: self
+  proto: tcp
+  dst_port: 5000-5999
+adblocker:
+  enabled: true
+  source_urls: [https://lists.example/hosts]
+ai_ids:
+  enabled: true
+tls_fingerprint:
+  enabled: true
+xdp_sni_filter:
+  enabled: true
+  interfaces: [lan, iot]
+iot:
+  enabled: true
+  zones: [iot]
+  isolated_macs: ["aa:bb:cc:dd:ee:01"]
+pqc:
+  enabled: true
+ipv6:
+  enabled: true
+management:
+  ipv6: true
+wireguard:
+  enabled: true
+  address: 10.99.0.1/24
+"""
+
+#: The same router with nothing to answer: the helper and the services
+#: down, the kernel's figures unreadable, a NIC not there.
+UNAVAILABLE_CONFIG = """\
+version: 1
+hostname: lab
+interfaces:
+  lan:
+    device: eth5
+    zone: lan
+    address: 192.168.1.1/24
+zones:
+  lan: {}
+ai_ids:
+  enabled: true
+xdp_sni_filter:
+  enabled: true
+  interfaces: [lan]
+tls_fingerprint:
+  enabled: true
+logging:
+  drops: false
+update:
+  auto_install_security: true
+"""
+
+#: Everything in order: the checklist's full score.
+CLEAN_CONFIG = """\
+version: 1
+hostname: home
+interfaces:
+  wan:
+    device: eth0
+    zone: wan
+  lan:
+    device: eth1
+    zone: lan
+    address: 192.168.1.1/24
+  guest:
+    device: eth2
+    zone: guest
+    address: 192.168.30.1/24
+zones:
+  wan: {}
+  lan: {}
+  guest: {}
+nat:
+  masquerade:
+  - out_zone: wan
+rules:
+- name: lan-to-wan
+  action: accept
+  from_zone: lan
+  to_zone: wan
+update:
+  auto_install_security: true
+"""
+
+LISTENERS = [
+    {"proto": "tcp", "address": "0.0.0.0", "port": 443, "device": None, "process": "fr-webui"},
+    {"proto": "tcp", "address": "0.0.0.0", "port": 22, "device": None, "process": "sshd"},
+    {"proto": "udp", "address": "0.0.0.0", "port": 53, "device": None, "process": None},
+    {"proto": "tcp", "address": "127.0.0.1", "port": 5432, "device": None, "process": "postgres"},
+    {"proto": "tcp", "address": "0.0.0.0", "port": 8080, "device": None, "process": "python3"},
+    {"proto": "tcp", "address": "0.0.0.0", "port": 5050, "device": None, "process": None},
+    {"proto": "udp", "address": "0.0.0.0", "port": 67, "device": "eth1", "process": "kea-dhcp4"},
+    {"proto": "udp", "address": "::", "port": 546, "device": None, "process": "dhcpcd"},
+    {"proto": "udp", "address": "0.0.0.0", "port": 51820, "device": None, "process": None},
+    {"proto": "tcp", "address": "2001:db8::1", "port": 443, "device": None, "process": "fr-webui"},
+    {"proto": "tcp", "address": "203.0.113.5", "port": 9000, "device": None, "process": "nc"},
+    {"proto": "udp", "address": "0.0.0.0", "port": 53530, "device": None, "process": None},
+    {"proto": "tcp", "address": "192.168.20.1", "port": 1883, "device": None, "process": "mosquitto"},
+]
+
+DROPS = [{"ts": NOW - 60 * i, "chain": "input" if i % 3 else "forward", "src": f"203.0.113.{i}",
+          "dst": "203.0.113.5" if i % 4 else None, "proto": "tcp" if i % 2 else "udp",
+          "dport": 23 + i if i % 5 else None, "in": "eth0" if i % 6 else None} for i in range(12)]
+
+ALERTS = "".join(json.dumps(e) + "\n" for e in [
+    {"ts": NOW - 7200, "user": "admin", "event": "user added", "alert": "Admin account added: old"},
+    {"ts": NOW - 3600, "user": "admin", "event": "login", "client": "198.51.100.7",
+     "alert": "Admin sign-in from a new address"},
+    {"ts": NOW - 1800, "user": "admin", "event": "apply"},
+    {"ts": NOW - 600.5, "user": "admin", "event": "ssh key added", "client": "192.168.1.50",
+     "alert": "SSH key added for admin"},
+])
+
 HELD = {"id": "a1b2c3d4e5f60718", "remaining": 280, "seconds": 300, "by": "admin",
         "addresses": ["192.168.1.1"]}
 
@@ -619,6 +821,57 @@ SESSIONS = {
     "dashboard/alerts-seen": ({"accounts": [ADMIN]}, [
         *_login(), {"post": "/alerts/seen", "form": {"until": "1793491100.5"}},
         {"post": "/alerts/seen", "form": {"until": "soon"}}]),
+    # -- the dashboard ---------------------------------------------------------------
+    "dashboard/everything": ({"accounts": [ADMIN, VIEWER], "files": {
+        "etc/fr_os/config.yaml": FULL_CONFIG,
+        "etc/fr_os/adblock.hosts": "# FR_OS\n" + "".join(f"0.0.0.0 ad{i}.example\n" for i in range(1234)) + "\n  \n",
+        "etc/fr_os/webui_pqc_openssl.cnf": "[fr_os_groups]\nGroups = X25519MLKEM768:X25519\n",
+        "etc/fr_os/rule_hits.json": json.dumps({"rules": {
+            "lan-web": {"since": NOW - 100 * 86400, "last_hit": None, "packets": 0},
+            "wan-in": {"since": NOW - 100 * 86400, "last_hit": NOW - 3600, "packets": 7},
+            "ssh-self": {"since": NOW - 10 * 86400, "last_hit": None, "packets": 0}}}),
+        "etc/fr_os/update_check.json": json.dumps({"current_version": frfw.__version__, "latest_version": "9.9.9",
+                                                   "update_available": True, "security": True}),
+        "etc/fr_os/backups/ruleset-20261030-120000.nft": "table inet fr_os {}\n",
+        "etc/fr_os/backups/ruleset-20261031-120000.nft": "table inet fr_os {}\n",
+        "etc/fr_os/backups/notes.txt": "not a backup\n",
+        "var/log/fr_os/audit.log": ALERTS,
+        "etc/fr_os/webui/alerts_seen.json": json.dumps({"admin": NOW - 5000}),
+        "proc/cmdline": "BOOT_IMAGE=/live/vmlinuz boot=live components quiet\n",
+        "proc/cpuinfo": "processor\t: 0\nmodel name\t: Intel(R) Celeron(R) N5105 @ 2.00GHz\n",
+        "proc/loadavg": "5.25 3.10 2.00 3/201 4300\n",
+        "sys/class/net/eth2/carrier": "1\n"},
+        "programs": [{"argv": ["systemctl", "is-active", "--", "fr-ai-ids.service"], "stdout": "active\n"}]},
+        [*_login(), {"get": "/"}, {"post": "/logout"}, *_login(VIEWER), {"get": "/"}],
+        [{"cmd": "ids_quarantine_status", "reply": {"ok": True, "quarantined": [], "count": 2, "macs": []}},
+         {"cmd": "firewall_drops", "reply": {"ok": True, "drops": DROPS}},
+         {"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS, "addresses": {
+             "eth0": ["203.0.113.5", "fe80::1"], "eth1": ["192.168.1.1", "2001:db8::1"], "eth2": ["192.168.20.1"],
+             "lo": ["127.0.0.1"]}}}]),
+    "dashboard/unavailable": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": UNAVAILABLE_CONFIG,
+        "etc/fr_os/update_check.json": json.dumps({"current_version": "0.0.1", "update_available": True}),
+        "proc/loadavg": None, "proc/meminfo": "MemTotal: 1 GB\n", "proc/uptime": "42.9 1\n"},
+        "programs": [{"argv": ["systemctl", "is-active", "--", "fr-tls-fp.service"], "error": "missing"}]},
+        [*_login(), {"get": "/"}],
+        [{"cmd": "ids_quarantine_status", "reply": {"ok": False, "message": "no quarantine set"}},
+         {"cmd": "listening_sockets", "reply": {"ok": False, "message": "ss failed"}}]),
+    # 1.x catches only OSError around these, so a helper that can't be
+    # reached fails the whole page.
+    "dashboard/helper-gone": ({"accounts": [ADMIN]}, [*_login(), {"get": "/"}],
+                              [{"cmd": "listening_sockets", "error": True}]),
+    "dashboard/invalid-config": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": "version: 1\nzones:\n  lan: {}\nrules:\n- name: bad\n  action: maybe\n",
+        "proc/uptime": "7322.0 1\n"}},
+        [*_login(), {"get": "/"}]),
+    "dashboard/clean": ({"accounts": [{**ADMIN, "username": "kolos", "totp": TOTP_SECRET}], "files": {
+        "etc/fr_os/config.yaml": CLEAN_CONFIG,
+        "etc/fr_os/update_check.json": json.dumps({"current_version": frfw.__version__,
+                                                   "update_available": False}),
+        "etc/fr_os/webui_pqc_openssl.cnf": "Groups = X25519\n"}},
+        [{"post": "/login", "form": {"username": "kolos", "password": ADMIN["password"]}, "csrf": None},
+         {"post": "/login/mfa/totp", "form": {"code": _totp}, "csrf": None}, {"get": "/"}],
+        [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS[:2], "addresses": {}}}]),
 }
 
 

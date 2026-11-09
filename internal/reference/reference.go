@@ -13,6 +13,8 @@
 //   - apply.jsonl: a session of applies, confirmations, reverts,
 //     rollbacks and saves against a fake system: the programs run, the
 //     replies, and the files before and after.
+//   - qr.jsonl: a text and the QR code SVG segno draws for it with 1.x's
+//     webUI settings (level M, the scale, its colours).
 //
 // The Go packages replay these in their tests.
 package reference
@@ -320,3 +322,15 @@ type WebUIAnswer struct {
 
 // WebUICases is every recorded webUI session.
 func WebUICases() ([]WebUICase, error) { return load[WebUICase]("webui.jsonl") }
+
+// QRCase is one QR code 1.x's webUI would draw: segno.make(Text,
+// error="m") saved as SVG at Scale, dark #0C141F on #FFFFFF.
+type QRCase struct {
+	ID    string `json:"id"`
+	Text  string `json:"text"`
+	Scale int    `json:"scale"`
+	SVG   string `json:"svg"`
+}
+
+// QRCases are qr.jsonl's cases.
+func QRCases() ([]QRCase, error) { return load[QRCase]("qr.jsonl") }
