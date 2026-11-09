@@ -29,14 +29,16 @@ var (
 // ipv6Gone are iproute2's answers when there is nothing to take off.
 var ipv6Gone = []string{"Cannot assign requested address", "Cannot find device"}
 
-func (s *System) kernelHasIPv6() bool { return isDir(filepath.Join(s.Paths.ProcNet, "ipv6", "conf")) }
+// KernelHasIPv6 is false with `ipv6.disable=1` on the kernel command
+// line (frfw.ipv6.kernel_has_ipv6).
+func (s *System) KernelHasIPv6() bool { return isDir(filepath.Join(s.Paths.ProcNet, "ipv6", "conf")) }
 
 const noKernelIPv6 = "this kernel runs without IPv6 (ipv6.disable=1 on its command line)"
 
 // checkIPv6 is the preflight of an apply with IPv6 on: a kernel with
 // IPv6, dhcpcd, and dnsmasq for the LAN's RAs.
 func (s *System) checkIPv6(c *config.Config) error {
-	if !s.kernelHasIPv6() {
+	if !s.KernelHasIPv6() {
 		return &StepError{noKernelIPv6}
 	}
 	if !isFile(s.Paths.DhcpcdBinary) {
@@ -353,9 +355,9 @@ func onOff(b bool) string {
 
 // --- the services -------------------------------------------------------------
 
-// serviceActive is frfw.ipv6.service_active: active, activating or
-// reloading; no systemd is not active.
-func (s *System) serviceActive(unit string) bool {
+// ServiceActive is frfw.ipv6.service_active: the unit is active,
+// activating or reloading; no systemd is not active.
+func (s *System) ServiceActive(unit string) bool {
 	res, err := Systemctl(s.Run, "is-active", unit, 30*time.Second)
 	if err != nil {
 		return false
@@ -390,7 +392,7 @@ func orStdout(res Result) string {
 }
 
 func (s *System) stopRA() error {
-	if exists(s.Paths.IPv6RAConf) || s.serviceActive(IPv6RAService) {
+	if exists(s.Paths.IPv6RAConf) || s.ServiceActive(IPv6RAService) {
 		if err := s.ipv6Systemctl("stop", IPv6RAService); err != nil {
 			return err
 		}
@@ -437,7 +439,7 @@ func (s *System) syncIPv6(c *config.Config, dryRun bool) (string, error) {
 		// Nothing to do -- not even a systemctl call -- unless an earlier
 		// apply turned it on.
 		if !(exists(p.IPv6DhcpcdConf) || exists(p.IPv6RAConf) || len(appliedULA(s.readULAState())) > 0 ||
-			s.serviceActive(IPv6Service) || s.serviceActive(IPv6RAService)) {
+			s.ServiceActive(IPv6Service) || s.ServiceActive(IPv6RAService)) {
 			return "IPv6 off", nil
 		}
 		if dryRun {
@@ -467,7 +469,7 @@ func (s *System) syncIPv6(c *config.Config, dryRun bool) (string, error) {
 	}
 
 	devices := c.WanDevices()
-	if !s.kernelHasIPv6() {
+	if !s.KernelHasIPv6() {
 		return "", &StepError{noKernelIPv6}
 	}
 	where := "; no LAN zone gets IPv6"

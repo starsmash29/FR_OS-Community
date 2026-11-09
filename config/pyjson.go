@@ -96,9 +96,9 @@ func writePyJSON(b *strings.Builder, v Value, indent int, sortKeys bool, depth i
 				b.WriteString(sep)
 			}
 			newline(depth + 1)
-			key, ok := keys[i].(string)
-			if !ok {
-				return fmt.Errorf("keys must be str, not %s", pyTypeName(keys[i]))
+			key, err := pyJSONKey(keys[i])
+			if err != nil {
+				return err
 			}
 			b.WriteString(PyJSONString(key))
 			b.WriteString(": ")
@@ -112,6 +112,22 @@ func writePyJSON(b *strings.Builder, v Value, indent int, sortKeys bool, depth i
 		return fmt.Errorf("Object of type %s is not JSON serializable", pyTypeName(v))
 	}
 	return nil
+}
+
+// pyJSONKey is a dict key as json.dumps writes it: a str as it is, and
+// a number, bool or None as its JSON text.
+func pyJSONKey(k Value) (string, error) {
+	switch x := k.(type) {
+	case string:
+		return x, nil
+	case nil, bool, *big.Int, float64:
+		var b strings.Builder
+		if err := writePyJSON(&b, x, -1, false, 0); err != nil {
+			return "", err
+		}
+		return b.String(), nil
+	}
+	return "", fmt.Errorf("keys must be str, int, float, bool or None, not %s", pyTypeName(k))
 }
 
 // PyJSONString is a str as json.dumps writes it (ensure_ascii): the

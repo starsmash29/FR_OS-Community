@@ -47,9 +47,9 @@ func (s *System) wgRun(stdin string, check bool, argv ...string) (Result, error)
 	return res, nil
 }
 
-// publicKeyOf is the X25519 public key of a base64 private key, or the
-// refusal of something that isn't one.
-func publicKeyOf(private string) (string, error) {
+// PublicKeyOf is frfw.wireguard.public_key_of: the X25519 public key of
+// a base64 private key, or the refusal of something that isn't one.
+func PublicKeyOf(private string) (string, error) {
 	raw, err := base64.StdEncoding.Strict().DecodeString(private)
 	if err == nil && len(raw) != 32 {
 		err = errors.New("length")
@@ -71,7 +71,7 @@ func (s *System) ensureWireguardKey() (string, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		key := config.PyStrip(string(data))
-		if _, err := publicKeyOf(key); err != nil {
+		if _, err := PublicKeyOf(key); err != nil {
 			return "", err
 		}
 		return key, nil
@@ -127,7 +127,7 @@ func routerAddress6(ula netip.Prefix) netip.Prefix {
 // listen on its address.
 func (s *System) syncWireguard(c *config.Config, dryRun bool) (string, error) {
 	wg := &c.Wireguard
-	withIPv6 := s.kernelHasIPv6()
+	withIPv6 := s.KernelHasIPv6()
 	if !wg.Enabled {
 		if dryRun {
 			return "WireGuard off (dry-run: nothing checked)", nil
