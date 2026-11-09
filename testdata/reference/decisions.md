@@ -265,3 +265,24 @@ a clean one, and the apply-helper gone. Cases: none differ. Decided:
   enough for a Micro QR Code, and one that isn't Latin-1 (segno would
   use Shift JIS or UTF-8); the TOTP page then shows no code, only the
   secret. Cases: the three such texts in qr.jsonl.
+
+## 2026-11-09: the filtering screens (phase 3b-2)
+
+The ad-block and local DNS, application control, TLS fingerprint, XDP
+SNI filter, IoT and AI-IDS screens are replayed in eighteen sessions
+of webui.jsonl (each screen shown, saved, refused and off, its state
+files missing, unreadable or odd, the apply-helper answering, refusing
+and gone). Cases: none differ. Decided:
+
+- **`ip -j link show` gets 10 seconds**, as `systemctl is-active` does
+  (3a-2). 1.x waits for it without a limit (frfw.xdp._run_ip); FR_OS 2
+  shows the filter as not attached after that. The program and its
+  arguments are the same.
+- **The XDP live log stream** (`/xdp/logs/stream`, server-sent events
+  from the journal) is left for phase 3c with the other read-only
+  views; the XDP page and its script are ported, so the page shows
+  "Connecting" until then.
+- **The harness** now records the case's root form-encoded in a
+  redirect (a helper error's socket path in `?error=`) as `@ROOT@`
+  form-encoded, and the replay compares pages and headers with its own
+  root put back the same way. No recorded case changes otherwise.
