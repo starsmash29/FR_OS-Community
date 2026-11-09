@@ -296,6 +296,82 @@ def _page_totp(page: str) -> str:
     return pyotp.TOTP(secret).at(time.time())
 
 
+class _Authenticator:
+    """A security key in software: one ES256 credential whose key comes
+    from `seed`, signing deterministically (RFC 6979), so its answers --
+    the attestation ("none", as most keys send) and every assertion -- are
+    the same on every run. `origin`, `challenge` and `bad_signature` give
+    the answers a phishing page, a replay or a broken key would."""
+
+    def __init__(self, seed: str):
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+        scalar = int.from_bytes(hashlib.sha256(seed.encode()).digest(), "big") % (order - 1) + 1
+        self.key = ec.derive_private_key(scalar, ec.SECP256R1())
+        self.id = hashlib.sha256(f"{seed}/id".encode()).digest()[:16]
+        self.count = 0
+
+    @staticmethod
+    def _b64(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    def _cose(self) -> bytes:
+        import cbor2
+
+        numbers = self.key.public_key().public_numbers()
+        return cbor2.dumps({1: 2, 3: -7, -1: 1, -2: numbers.x.to_bytes(32, "big"),
+                            -3: numbers.y.to_bytes(32, "big")})
+
+    def _client_data(self, kind: str, options: dict, origin: str, challenge: str | None) -> bytes:
+        return json.dumps({"type": kind, "challenge": challenge or options["challenge"], "origin": origin,
+                           "crossOrigin": False}, separators=(",", ":")).encode()
+
+    def register(self, origin: str = "https://router.lan", challenge: str | None = None):
+        def answer(page: str) -> dict:
+            import cbor2
+
+            start = json.loads(page)
+            options = start["options"]
+            rp_hash = hashlib.sha256(options["rp"]["id"].encode()).digest()
+            auth_data = (rp_hash + bytes([0x41]) + self.count.to_bytes(4, "big") + bytes(16)
+                         + len(self.id).to_bytes(2, "big") + self.id + self._cose())
+            attestation = cbor2.dumps({"fmt": "none", "attStmt": {}, "authData": auth_data})
+            return {"tid": start["tid"], "credential": {
+                "id": self._b64(self.id), "rawId": self._b64(self.id), "type": "public-key",
+                "response": {
+                    "clientDataJSON": self._b64(self._client_data("webauthn.create", options, origin, challenge)),
+                    "attestationObject": self._b64(attestation), "transports": ["usb"]},
+                "clientExtensionResults": {}}}
+        return answer
+
+    def sign(self, origin: str = "https://router.lan", challenge: str | None = None,
+             bad_signature: bool = False, count: int | None = None):
+        def answer(page: str) -> dict:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import ec
+
+            options = json.loads(page)
+            self.count = self.count + 1 if count is None else count
+            auth_data = (hashlib.sha256(options["rpId"].encode()).digest() + bytes([0x01])
+                         + self.count.to_bytes(4, "big"))
+            client_data = self._client_data("webauthn.get", options, origin, challenge)
+            signed = auth_data + hashlib.sha256(client_data).digest()
+            if bad_signature:
+                signed = signed[:-1] + bytes([signed[-1] ^ 1])
+            signature = self.key.sign(signed, ec.ECDSA(hashes.SHA256(), deterministic_signing=True))
+            return {"id": self._b64(self.id), "rawId": self._b64(self.id), "type": "public-key",
+                    "response": {"clientDataJSON": self._b64(client_data),
+                                 "authenticatorData": self._b64(auth_data),
+                                 "signature": self._b64(signature), "userHandle": None},
+                    "clientExtensionResults": {}}
+        return answer
+
+
+def _page_key_id(page: str) -> str:
+    return re.search(r'name="key_id" value="([^"]+)"', page).group(1)
+
+
 def _session(webui, name: str, setup: dict, steps: list, table: list | None = None) -> None:
     programs = setup.get("programs", [])
     fake, root = webui(name, table or [], programs)
@@ -315,6 +391,7 @@ def _session(webui, name: str, setup: dict, steps: list, table: list | None = No
         method = "POST" if "post" in step else "GET"
         path = step.get("post") or step.get("get")
         form = {k: v(last) if callable(v) else v for k, v in step.get("form", {}).items()}
+        sent_json = step["json"](last) if callable(step.get("json")) else step.get("json")
         headers = dict(step.get("headers", {}))
         csrf = step.get("csrf", "field" if method == "POST" else None)
         if csrf == "field":
@@ -328,14 +405,14 @@ def _session(webui, name: str, setup: dict, steps: list, table: list | None = No
         fake.system.calls = []
         if method == "POST":
             if "json" in step:
-                response = client.post(path, json=step["json"], headers=headers)
+                response = client.post(path, json=sent_json, headers=headers)
             else:
                 response = client.post(path, data=form, headers=headers)
         else:
             response = client.get(path, headers=headers)
         body = response.content
         record = {
-            "method": method, "path": path, "form": form, "json": step.get("json"),
+            "method": method, "path": path, "form": form, "json": sent_json,
             "headers": headers, "cookies": sent_cookies,
             "status": response.status_code,
             "response_headers": [[k, v] for k, v in response.headers.multi_items()
@@ -367,6 +444,9 @@ def _login(account=ADMIN) -> list:
     return [{"post": "/login", "form": {"username": account["username"], "password": account["password"]},
              "csrf": None}]
 
+
+_KEY_ENROL = _Authenticator("enrol")
+_KEY_LOGIN = _Authenticator("login")
 
 HELD = {"id": "a1b2c3d4e5f60718", "remaining": 280, "seconds": 300, "by": "admin",
         "addresses": ["192.168.1.1"]}
@@ -455,6 +535,58 @@ SESSIONS = {
         {"get": "/account/mfa"},
         {"post": "/users/mfa-policy", "form": {"require": "true"}},
         {"post": "/account/mfa/remove", "form": {"kind": "totp", "password": "Correct-horse-9"}},
+        {"get": "/"}]),
+    "mfa/webauthn-enrol": ({"accounts": [ADMIN]}, [
+        *_login(), {"get": "/account/mfa"},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "bad", "name": "Desk key"},
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": "Desk key"},
+         "csrf": "header", "headers": {"Host": "192.168.1.1"}},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": "Desk key"},
+         "csrf": None},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": "Desk key"},
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/register", "json": _KEY_ENROL.register(origin="https://evil.lan"),
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": "Desk key"},
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/register", "json": _KEY_ENROL.register(challenge="AAAA"),
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": "Desk key"},
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/register", "json": _KEY_ENROL.register(), "csrf": "header"},
+        {"get": "/account/mfa"},
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": "Again"},
+         "csrf": "header"},
+        {"get": "/account/mfa"},
+        {"post": "/account/mfa/remove", "form": {"kind": "webauthn", "key_id": _page_key_id,
+                                                 "password": "Correct-horse-9"}},
+        {"post": "/account/mfa/remove", "form": {"kind": "sms", "password": "Correct-horse-9"}},
+        {"get": "/account/mfa"}]),
+    "mfa/webauthn-login": ({"accounts": [ADMIN]}, [
+        *_login(),
+        {"post": "/account/mfa/webauthn/options", "json": {"password": "Correct-horse-9", "name": ""},
+         "csrf": "header"},
+        {"post": "/account/mfa/webauthn/register", "json": _KEY_LOGIN.register(), "csrf": "header"},
+        {"post": "/logout"},
+        *_login(), {"get": "/login/mfa"},
+        {"get": "/login/mfa", "headers": {"Host": "192.168.1.1"}},
+        {"post": "/login/mfa/webauthn/options", "csrf": None, "headers": {"Host": "192.168.1.1"}},
+        {"post": "/login/mfa/webauthn/verify", "json": {"id": "x"}, "csrf": None},
+        {"post": "/login/mfa/webauthn/options", "csrf": None},
+        {"post": "/login/mfa/webauthn/verify", "json": _KEY_LOGIN.sign(bad_signature=True), "csrf": None},
+        {"post": "/login/mfa/webauthn/options", "csrf": None},
+        {"post": "/login/mfa/webauthn/verify", "json": _KEY_LOGIN.sign(origin="https://evil.lan"),
+         "csrf": None},
+        {"post": "/login/mfa/webauthn/options", "csrf": None},
+        {"post": "/login/mfa/webauthn/verify", "json": _KEY_LOGIN.sign(), "csrf": None},
+        {"get": "/"},
+        {"post": "/logout"},
+        *_login(),
+        {"post": "/login/mfa/webauthn/options", "csrf": None},
+        {"post": "/login/mfa/webauthn/verify", "json": _KEY_LOGIN.sign(count=1), "csrf": None},
+        {"post": "/login/mfa/webauthn/options", "csrf": None},
+        {"post": "/login/mfa/webauthn/verify", "json": _KEY_LOGIN.sign(count=9), "csrf": None},
         {"get": "/"}]),
     # -- the dashboard's buttons -----------------------------------------------------
     "dashboard/apply": ({"accounts": [ADMIN]}, [
