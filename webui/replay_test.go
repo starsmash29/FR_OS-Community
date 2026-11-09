@@ -64,6 +64,7 @@ type fakeHelpers struct {
 	answers []reference.WebUIAnswer
 	times   []int
 	calls   []config.Value
+	root    string
 }
 
 func newFakeHelpers(c reference.WebUICase) *fakeHelpers {
@@ -119,6 +120,12 @@ func (f *fakeHelpers) send(socketPath string, cmd *config.Map, timeout float64, 
 		return nil, err
 	}
 	call.Set("reply", reply)
+	if a.Save {
+		text, _ := cmd.Get("yaml")
+		if err := os.WriteFile(filepath.Join(f.root, "etc/fr_os/config.yaml"), []byte(pyStr(text)), 0o644); err != nil {
+			return nil, err
+		}
+	}
 	again, _ := config.ParseJSON(a.Reply) // the route gets its own copy
 	return again, nil
 }
@@ -160,6 +167,7 @@ func replay(t *testing.T, c reference.WebUICase) {
 	random := bytes.NewReader(stream[c.RandomStart:])
 	now := c.Now
 	helpers := newFakeHelpers(c)
+	helpers.root = root
 	programs := &fakePrograms{table: slices.Concat(c.Programs, c.ProgramBase), passed: map[int]int{}}
 	env := Env{
 		Now:    func() float64 { return now },
@@ -276,8 +284,10 @@ func request1x(step reference.WebUIStep) *http.Request {
 		body, contentType = step.JSON, "application/json"
 	case step.Method == "POST" && len(step.Form) > 0:
 		values := url.Values{}
-		for k, v := range step.Form {
-			values.Set(k, v)
+		for k, vs := range step.Form {
+			for _, v := range vs {
+				values.Add(k, v)
+			}
 		}
 		body, contentType = []byte(values.Encode()), "application/x-www-form-urlencoded"
 	}

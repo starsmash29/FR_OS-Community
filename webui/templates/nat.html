@@ -1,0 +1,73 @@
+{{define "title"}}NAT - FR_OS{{end}}
+{{define "content"}}
+<h1>NAT</h1>
+
+<div class="card">
+  <h3>Masquerade (outbound NAT)</h3>
+  <table>
+    <tr><th>Out zone</th><th></th></tr>
+    {{range .Data.Masquerade}}
+    <tr>
+      <td>{{.}}</td>
+      <td>
+        <form class="inline" method="post" action="/nat/masquerade/delete/{{.}}">
+          {{$.CSRFInput}}
+          <button type="submit" class="danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  <form method="post" action="/nat/masquerade/add">
+    {{.CSRFInput}}
+    <label>Out zone</label>
+    <select name="out_zone" required>
+      {{range .Data.Zones}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <button type="submit">Add masquerade</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Port forwards (inbound DNAT)</h3>
+  <table>
+    <tr><th>Name</th><th>In zone</th><th>Proto</th><th>Port</th><th>To</th><th></th></tr>
+    {{range .Data.PortForwards}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.InZone}}</td>
+      <td>{{.Proto}}</td>
+      <td>{{.DstPort}}</td>
+      <td>{{.ToAddress}}:{{.ToPort}}</td>
+      <td>
+        <form class="inline" method="post" action="/nat/portforward/delete/{{.Name}}" data-confirm="Delete port forward {{.Name}}?">
+          {{$.CSRFInput}}
+          <button type="submit" class="danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  <form method="post" action="/nat/portforward/add">
+    {{.CSRFInput}}
+    <label>Name</label>
+    <input type="text" name="name" pattern="[a-z][a-z0-9_-]*" required>
+    <label>In zone</label>
+    <select name="in_zone" required>
+      {{range .Data.Zones}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <label>Protocol</label>
+    <select name="proto" required>
+      <option value="tcp">tcp</option>
+      <option value="udp">udp</option>
+    </select>
+    <label>Destination port</label>
+    <input type="number" name="dst_port" min="1" max="65535" required>
+    <label>Forward to address</label>
+    <input type="text" name="to_address" placeholder="10.0.2.10" required>
+    <label>Forward to port (blank = same as destination port)</label>
+    <input type="number" name="to_port" min="1" max="65535">
+    <button type="submit">Add port forward</button>
+  </form>
+</div>
+{{end}}

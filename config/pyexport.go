@@ -199,3 +199,6 @@ func CheckHostname(s string) error {
 	}
 	return nil
 }
+
+// ValidZoneName is zoneinfo.ZoneInfo(name) succeeding.
+func ValidZoneName(name string) bool { return validZoneName(name) }

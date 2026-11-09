@@ -29,12 +29,24 @@ const maxBody = 1 << 20
 // its last value, as Starlette's FormData.get.
 type form struct {
 	values map[string]string
+	all    map[string][]string
 	has    bool
 }
 
 func (f form) get(name string) (string, bool) {
 	v, ok := f.values[name]
 	return v, ok
+}
+
+// getAll is FormData.getlist: every value under the name, in order.
+func (f form) getAll(name string) []string { return f.all[name] }
+
+func (f *form) add(name, value string) {
+	if f.values == nil {
+		f.values, f.all = map[string]string{}, map[string][]string{}
+	}
+	f.values[name] = value
+	f.all[name] = append(f.all[name], value)
 }
 
 // pyUnquotePlus is Starlette's unquote_plus(field.decode("latin-1")):
@@ -137,14 +149,14 @@ func invalidPrefix(data []byte) int {
 // readForm is request.form(): urlencoded or multipart; any other body
 // is no form at all.
 func readForm(r *http.Request, body []byte) (form, error) {
-	f := form{values: map[string]string{}}
+	f := form{values: map[string]string{}, all: map[string][]string{}}
 	ct, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	switch ct {
 	case "application/x-www-form-urlencoded":
 		f.has = true
 		for _, part := range bytes.FieldsFunc(body, func(r rune) bool { return r == '&' }) {
 			name, value, _ := bytes.Cut(part, []byte("="))
-			f.values[pyUnquotePlus(name)] = pyUnquotePlus(value)
+			f.add(pyUnquotePlus(name), pyUnquotePlus(value))
 		}
 	case "multipart/form-data":
 		f.has = true
@@ -161,7 +173,7 @@ func readForm(r *http.Request, body []byte) (form, error) {
 			if err != nil {
 				return f, err
 			}
-			f.values[p.FormName()] = pyDecodeUTF8(data)
+			f.add(p.FormName(), pyDecodeUTF8(data))
 		}
 	}
 	return f, nil

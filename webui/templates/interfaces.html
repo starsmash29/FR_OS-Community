@@ -1,0 +1,102 @@
+{{define "title"}}Interfaces - FR_OS{{end}}
+{{define "content"}}
+<h1>Interfaces</h1>
+
+<table>
+  <tr><th>Name</th><th>Device</th><th>Zone</th><th>Address</th><th></th></tr>
+  {{range .Data.Interfaces}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td>{{.Device}}</td>
+    <td>{{.Zone}}</td>
+    <td>{{.Address}}</td>
+    <td>
+      <a href="/interfaces?edit={{.Name}}">Edit</a>
+      <form class="inline" method="post" action="/interfaces/delete/{{.Name}}" data-confirm="Delete interface {{.Name}}?">
+        {{$.CSRFInput}}
+        <button type="submit" class="danger">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {{end}}
+</table>
+
+<div class="card">
+  <h3>{{if .Data.Edit}}Edit interface{{else}}Add interface{{end}}</h3>
+  <form method="post" action="/interfaces/save">
+    {{.CSRFInput}}
+    <label>Name</label>
+    <input type="text" name="name" value="{{with .Data.Edit}}{{.Name}}{{end}}" {{if .Data.Edit}}readonly{{end}} pattern="[a-z][a-z0-9_-]*" required>
+    <label>Device</label>
+    <input type="text" name="device" value="{{with .Data.Edit}}{{.Device}}{{end}}" placeholder="eth0" required>
+    <label>Zone</label>
+    <input type="text" name="zone" value="{{with .Data.Edit}}{{.Zone}}{{end}}" placeholder="lan" pattern="[a-z][a-z0-9_-]*" required>
+    <label>Static address (CIDR, optional -- e.g. 10.0.0.1/24)</label>
+    <input type="text" name="address" value="{{with .Data.Edit}}{{.Address}}{{end}}" placeholder="10.0.0.1/24">
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>IPv6</h3>
+  <p class="muted">
+    The router takes IPv6 from the provider on its internet-facing
+    interfaces: an address (SLAAC or DHCPv6) and, if the provider
+    delegates one, a prefix. Each LAN zone's interface gets a /64 network
+    of that prefix, which its devices configure themselves from (SLAAC;
+    <code>ipv6.lan_zones</code> chooses the zones, all of them by
+    default). Each also gets a stable network of the router's own (ULA),
+    where the router answers DNS whatever the provider gives. The rules
+    decide what the LAN reaches over IPv6, as over IPv4; nothing new comes
+    in from the internet but through a pinhole (<code>ipv6.pinholes</code>).
+    The webUI and SSH answer over IPv6 only with
+    <code>management.ipv6</code>, on the stable address.
+  </p>
+  {{with .Data.IPv6}}
+  <p id="ipv6-summary" data-state="{{.State}}">{{.Summary}}</p>
+  {{if .Shown}}
+  <dl>
+    {{range .Addresses}}
+    <dt>{{.Term}}</dt><dd class="ipv6-address">{{.Detail}}</dd>
+    {{end}}
+    {{range .Routes}}
+    <dt>Default route</dt><dd>via {{.Detail}} on {{.Term}}</dd>
+    {{end}}
+    {{range .Prefixes}}
+    <dt>Delegated prefix</dt><dd class="ipv6-prefix">{{.}}</dd>
+    {{end}}
+    {{range .Lan}}
+    <dt>{{.Term}}</dt><dd class="ipv6-lan">{{.Detail}}</dd>
+    {{end}}
+    {{range .Ula}}
+    <dt>{{.Term}}, stable</dt><dd class="ipv6-ula">{{.Detail}}</dd>
+    {{end}}
+    {{range .Pinholes}}
+    <dt>Pinhole {{.Name}}</dt><dd class="ipv6-pinhole">{{.Text}}</dd>
+    {{end}}
+  </dl>
+  {{end}}
+  {{end}}
+  <form method="post" action="/interfaces/ipv6">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="enabled" value="true" {{if .Data.IPv6Enabled}}checked{{end}}>
+      Take IPv6 from the provider</label>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Detected network interfaces</h3>
+  <table>
+    <tr><th>Name</th><th>Driver</th><th>MAC</th><th>Link</th></tr>
+    {{range .Data.Detected}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.Driver}}</td>
+      <td>{{.MAC}}</td>
+      <td>{{.Link}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}

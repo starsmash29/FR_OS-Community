@@ -31,6 +31,7 @@ anything about 1.x.
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -110,6 +111,7 @@ BASE = [
                                      "service_active": False, "lan": [], "ra_active": False, "excluded": []}},
     {"cmd": "ban_ip", "reply": {"ok": True, "message": "jailed"}},
     {"cmd": "apply", "reply": {"ok": True, "message": "applied"}},
+    {"cmd": "save_config", "save": True, "reply": {"ok": True, "message": "Config saved to /etc/fr_os/config.yaml"}},
     {"cmd": "ping", "socket": UPDATE_SOCKET, "reply": {"ok": True, "message": "pong"}},
 ]
 
@@ -177,6 +179,8 @@ class _Fake:
                 entry["times"] -= 1
             if "error" not in entry:
                 self.calls.append({**call, "reply": entry["reply"]})
+                if entry.get("save"):  # what the real save_config leaves on disk
+                    (self.system.root / "etc/fr_os/config.yaml").write_text(cmd["yaml"], encoding="utf-8")
                 return json.loads(json.dumps(entry["reply"]))
             break
         message = f"cannot reach apply-helper at {socket_path}: [Errno 2] No such file or directory"
@@ -225,6 +229,18 @@ def webui(monkeypatch, tmp_path):
     monkeypatch.setattr(integrity, "_cache", {})
     monkeypatch.setattr(audit, "_writers", {})
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: state["system"].run(*a, **k))
+    # The rules screen and the schedules read the wall clock through
+    # datetime.now, which doesn't go through time.time.
+    from frfw.nft import schedule
+    from frfw.webui.routes import rules as rules_routes
+
+    class _Clock(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt.datetime.fromtimestamp(state["fake"].now, tz)
+
+    monkeypatch.setattr(schedule, "datetime", _Clock)
+    monkeypatch.setattr(rules_routes, "datetime", _Clock)
 
     def make(name: str, table: list, programs: list) -> tuple[_Fake, Path]:
         state["fake"] = _Fake(name, table)
@@ -658,6 +674,81 @@ ALERTS = "".join(json.dumps(e) + "\n" for e in [
 HELD = {"id": "a1b2c3d4e5f60718", "remaining": 280, "seconds": 300, "by": "admin",
         "addresses": ["192.168.1.1"]}
 
+
+#: The first screens that write the config (phase 3b-1): rules, NAT,
+#: interfaces, DHCP and segments. Every save goes through save_config,
+#: which BASE answers by writing the YAML where the real helper would.
+RULES_CONFIG = """\
+version: 1
+hostname: fr-router
+timezone: Europe/Budapest
+interfaces:
+  wan: {device: eth0, zone: wan}
+  lan: {device: eth1, zone: lan, address: 192.168.1.1/24}
+  dmz: {device: eth2, zone: dmz, address: 10.0.2.1/24}
+zones: {wan: {}, lan: {}, dmz: {}}
+nat:
+  masquerade: [{out_zone: wan}]
+rules:
+- {name: lan-to-wan, action: accept, from_zone: lan, to_zone: wan}
+- {name: web, action: accept, from_zone: lan, to_zone: wan, proto: tcp, dst_port: 443, log: true}
+- {name: kids-night, action: drop, from_zone: lan, to_zone: wan, src_mac: 'aa:bb:cc:dd:ee:01',
+   schedule: {days: [weekdays], start: '21:30', end: '06:30', cut_established: true}}
+- {name: weekend, action: accept, from_zone: lan, to_zone: dmz, schedule: {days: [sat, sun], start: '00:00', end: '23:59'}}
+- {name: old-temp, action: accept, from_zone: lan, to_zone: dmz, proto: tcp, dst_port: 8000-8100, expires: '2026-10-01T12:00'}
+- {name: soon, action: accept, from_zone: lan, to_zone: dmz, proto: udp, dst_port: 53, expires: '2026-11-01T09:00'}
+- {name: ssh, action: accept, from_zone: lan, to_zone: self, proto: tcp, dst_port: 22, require_ztna: true}
+- {name: everything, action: accept}
+- {name: dmz-mail, action: accept, from_zone: wan, to_zone: dmz, proto: tcp, dst_port: 25,
+   src_address: [203.0.113.0/24, '2001:db8::/32'], dst_address: 10.0.2.25}
+"""
+
+NAT_CONFIG = """\
+version: 1
+hostname: fr-router
+interfaces:
+  wan: {device: eth0, zone: wan}
+  lan: {device: eth1, zone: lan, address: 192.168.1.1/24}
+  guest: {device: eth2, zone: guest, address: 192.168.40.1/24}
+zones: {wan: {}, lan: {}, guest: {}}
+nat:
+  masquerade: [{out_zone: wan}]
+  port_forwards:
+  - {name: web, in_zone: wan, proto: tcp, dst_port: 8443, to_address: 192.168.1.10, to_port: 443}
+dhcp:
+  lan:
+    range_start: 192.168.1.100
+    range_end: 192.168.1.199
+    dns_servers: [192.168.1.1]
+    reservations:
+    - {mac: 'aa:bb:cc:dd:ee:01', address: 192.168.1.50, hostname: nas}
+ipv6: {enabled: true, lan_zones: [lan]}
+rules:
+- {name: lan-to-wan, action: accept, from_zone: lan, to_zone: wan}
+"""
+
+NO_LAN_CONFIG = """\
+version: 1
+hostname: fr-router
+interfaces:
+  wan: {device: eth0, zone: wan}
+  office: {device: eth1, zone: office, address: 192.168.30.1/24}
+zones: {wan: {}, office: {}}
+nat:
+  masquerade: [{out_zone: wan}]
+"""
+
+HITS = json.dumps({"rules": {
+    "web": {"since": NOW - 200 * 86400, "last_hit": NOW - 7200, "packets": 12},
+    "weekend": {"since": NOW - 120 * 86400, "last_hit": None, "packets": 0},
+    "dmz-mail": {"since": NOW - 5 * 86400, "last_hit": None, "packets": 0}}})
+
+RULE = {"name": "block-dmz", "action": "drop", "from_zone": "lan", "to_zone": "wan", "proto": "tcp",
+        "dst_port": "8080-8090", "src_address": " 192.168.1.0/25 , 2001:db8:1::/48,", "dst_address": "",
+        "log": "on", "require_ztna": "", "src_mac": " AA:BB:CC:DD:EE:02 ", "schedule_days": ["mon", "fri"],
+        "schedule_start": "08:00", "schedule_end": "17:00", "cut_established": "true",
+        "expires": "2026-12-24T18:00"}
+
 SESSIONS = {
     # -- signing in ------------------------------------------------------------------
     "login/form-no-account": ({"accounts": [], "files": {"etc/fr_os/config.yaml": None}}, [{"get": "/login"}, {"get": "/"}]),
@@ -795,6 +886,173 @@ SESSIONS = {
         {"post": "/login/mfa/webauthn/options", "csrf": None},
         {"post": "/login/mfa/webauthn/verify", "json": _KEY_LOGIN.sign(count=9), "csrf": None},
         {"get": "/"}]),
+    # -- the rules screen (3b-1) -------------------------------------------------------
+    "rules/list": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG,
+                                                  "etc/fr_os/rule_hits.json": HITS}},
+                   [*_login(), {"get": "/rules"}, {"get": "/rules?error=Bad+rule&success=Saved"},
+                    {"advance": 9 * 3600}, {"get": "/rules"}]),
+    "rules/add": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(),
+        {"post": "/rules/add", "form": RULE},
+        {"post": "/rules/add", "form": {"name": "block-guest-web", "action": "reject", "from_zone": "lan",
+                                         "to_zone": "wan", "proto": "tcp", "dst_port": "443"}},
+        {"post": "/rules/add", "form": {"name": "open", "action": "accept", "from_zone": "wan",
+                                         "to_zone": "dmz"}},
+        {"post": "/rules/add", "form": {"name": "web", "action": "accept", "from_zone": "lan", "to_zone": "wan",
+                                         "proto": "tcp", "dst_port": "80"}},
+        {"post": "/rules/add", "form": {"name": "dns", "action": "accept", "from_zone": "lan", "to_zone": "self",
+                                         "proto": "udp", "dst_port": "53", "schedule_end": "06:00"}},
+        {"post": "/rules/add", "form": {"name": "bad", "action": "maybe"}},
+        {"post": "/rules/add", "form": {"name": "bad-port", "action": "accept", "proto": "any",
+                                         "dst_port": "0443"}},
+        {"post": "/rules/add", "form": {"name": "bad-zone", "action": "accept", "from_zone": "mars"}},
+        {"post": "/rules/add", "form": {"name": "x", "action": "accept", "log": "maybe", "cut_established": "2"}},
+        {"post": "/rules/add", "form": {"action": "accept"}},
+        {"post": "/rules/add", "form": {"name": "", "action": ""}},
+        {"get": "/rules"}]),
+    "rules/move-delete": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(),
+        {"post": "/rules/move/web", "form": {"direction": "up"}},
+        {"post": "/rules/move/web", "form": {"direction": "up"}},
+        {"post": "/rules/move/dmz-mail", "form": {"direction": "down"}},
+        {"post": "/rules/move/web", "form": {"direction": "sideways"}},
+        {"post": "/rules/move/nope", "form": {"direction": "down"}},
+        {"post": "/rules/move/web", "form": {}},
+        {"post": "/rules/delete/everything"},
+        {"post": "/rules/delete/everything"},
+        {"post": "/rules/remove-expired"},
+        {"post": "/rules/remove-expired"},
+        {"advance": 9 * 3600},
+        {"post": "/rules/remove-expired"},
+        {"get": "/rules"}]),
+    "rules/timezone": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(),
+        {"post": "/rules/timezone", "form": {"timezone": " America/New_York "}},
+        {"get": "/rules"},
+        {"post": "/rules/timezone", "form": {"timezone": "Mars/Olympus"}},
+        {"post": "/rules/timezone", "form": {"timezone": ""}},
+        {"get": "/rules"}]),
+    "rules/invalid-config": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": RULES_CONFIG.replace("action: drop, from_zone: lan, to_zone: wan, src_mac",
+                                                      "action: maybe, from_zone: lan, to_zone: wan, src_mac"),
+        "etc/fr_os/rule_hits.json": "{not json"}},
+        [*_login(), {"get": "/rules"}, {"post": "/rules/remove-expired"},
+         {"post": "/rules/delete/kids-night"}, {"get": "/rules"}]),
+    "rules/empty-config": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": None}}, [
+        *_login(), {"get": "/rules"},
+        {"post": "/rules/add", "form": {"name": "a", "action": "accept"}}]),
+    "rules/save-refused": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(), {"post": "/rules/delete/web"}, {"post": "/rules/timezone", "form": {"timezone": "UTC"}}],
+        [{"cmd": "save_config", "reply": {"ok": False, "message": "could not write config.yaml"}, "times": 1},
+         {"cmd": "save_config", "error": True}]),
+    "rules/viewer": ({"accounts": [ADMIN, VIEWER], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(VIEWER), {"get": "/rules"}, {"post": "/rules/delete/web"}]),
+    # -- NAT -------------------------------------------------------------------------
+    "nat/edit": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": NAT_CONFIG}}, [
+        *_login(), {"get": "/nat"},
+        {"post": "/nat/masquerade/add", "form": {"out_zone": "wan"}},
+        {"post": "/nat/masquerade/add", "form": {"out_zone": "guest"}},
+        {"post": "/nat/masquerade/add", "form": {"out_zone": "nowhere"}},
+        {"post": "/nat/masquerade/add", "form": {}},
+        {"post": "/nat/masquerade/delete/guest"},
+        {"post": "/nat/portforward/add", "form": {"name": "ssh", "in_zone": "wan", "proto": "tcp",
+                                                  "dst_port": " 2_222 ", "to_address": "192.168.1.20",
+                                                  "to_port": "22"}},
+        {"post": "/nat/portforward/add", "form": {"name": "game", "in_zone": "wan", "proto": "udp",
+                                                  "dst_port": "27015.0", "to_address": "192.168.1.30",
+                                                  "to_port": ""}},
+        {"post": "/nat/portforward/add", "form": {"name": "web", "in_zone": "wan", "proto": "tcp",
+                                                  "dst_port": "8443", "to_address": "192.168.1.11",
+                                                  "to_port": "0"}},
+        {"post": "/nat/portforward/add", "form": {"name": "big", "in_zone": "wan", "proto": "tcp",
+                                                  "dst_port": "99999999999999999999", "to_address": "192.168.1.11"}},
+        {"post": "/nat/portforward/add", "form": {"name": "bad", "in_zone": "wan", "proto": "icmp",
+                                                  "dst_port": "1.5", "to_address": "x", "to_port": "abc"}},
+        {"post": "/nat/portforward/add", "form": {"name": "out", "in_zone": "wan", "proto": "tcp",
+                                                  "dst_port": "80", "to_address": "8.8.8.8"}},
+        {"post": "/nat/portforward/delete/game"},
+        {"post": "/nat/portforward/delete/nothing"},
+        {"get": "/nat"}]),
+    "nat/empty": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": NO_LAN_CONFIG.replace(
+        "nat:\n  masquerade: [{out_zone: wan}]\n", "")}}, [
+        *_login(), {"get": "/nat"},
+        {"post": "/nat/portforward/delete/web"}, {"post": "/nat/masquerade/delete/wan"}]),
+    # -- interfaces ------------------------------------------------------------------
+    "interfaces/edit": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": NAT_CONFIG,
+        "sys/class/net/eth2/address": "52:54:00:12:34:58\n",
+        "sys/class/net/wlan0/address": "52:54:00:12:34:59\n",
+        "sys/class/net/wlan0/carrier": "garbage\n",
+        "sys/class/net/wlan0/speed": "-1\n",
+        "sys/class/net/lo/address": "00:00:00:00:00:00\n"}}, [
+        *_login(), {"get": "/interfaces"}, {"get": "/interfaces?edit=lan"}, {"get": "/interfaces?edit=nope"},
+        {"post": "/interfaces/save", "form": {"name": "dmz", "device": "eth3", "zone": "dmz",
+                                              "address": " 10.0.3.1/24 "}},
+        {"post": "/interfaces/save", "form": {"name": "lan", "device": "eth1", "zone": "lan",
+                                              "address": "192.168.1.1/33"}},
+        {"post": "/interfaces/save", "form": {"name": "x", "device": "eth4"}},
+        {"post": "/interfaces/delete/dmz"},
+        {"post": "/interfaces/delete/dmz"},
+        {"post": "/interfaces/delete/guest"},
+        {"post": "/interfaces/delete/lan"},
+        {"post": "/interfaces/ipv6", "form": {}},
+        {"post": "/interfaces/ipv6", "form": {"enabled": "yes"}},
+        {"post": "/interfaces/ipv6", "form": {"enabled": "sure"}},
+        {"get": "/interfaces"}],
+        [{"cmd": "ipv6_status", "reply": {
+            "ok": True, "state": "ok", "summary": "IPv6 from the provider: 2001:db8:100::/56.",
+            "devices": ["eth0"], "addresses": [["eth0", "2001:db8::5/64", "slaac"], ["eth0", "2001:db8::6/128", "dhcpv6"]],
+            "default_routes": [["eth0", "fe80::1"]], "prefixes": ["2001:db8:100::/56"], "service_active": True,
+            "lan": [["lan", "eth1", "2001:db8:100:1::/64"], ["guest", "eth2", None]],
+            "ula": [["lan", "eth1", "fd12:3456:789a:1::1/64"]],
+            "pinholes": [["nas-https", "lan", "tcp/443", ["2001:db8:100:1::50"]], ["cam", "guest", "udp/554", None],
+                         ["game", "lan", "tcp/27015", []]],
+            "ra_active": True, "excluded": ["guest"]}, "times": 2},
+         {"cmd": "ipv6_status", "reply": {"ok": False, "message": "netlink said no"}}]),
+    "interfaces/ipv6-off": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(), {"get": "/interfaces"}, {"post": "/interfaces/ipv6", "form": {"enabled": "on"}},
+        {"post": "/interfaces/ipv6", "form": {"enabled": "off"}}]),
+    "interfaces/helper-gone": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": RULES_CONFIG}}, [
+        *_login(), {"get": "/interfaces"}], [{"cmd": "ipv6_status", "error": True}]),
+    # -- DHCP ------------------------------------------------------------------------
+    "dhcp/edit": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": NAT_CONFIG}}, [
+        *_login(), {"get": "/dhcp"},
+        {"post": "/dhcp/guest/save", "form": {"range_start": "192.168.40.100", "range_end": "192.168.40.150",
+                                              "dns_servers": " 1.1.1.1, ,9.9.9.9 ", "lease_time": "7_200"}},
+        {"post": "/dhcp/lan/save", "form": {"range_start": "192.168.1.100", "range_end": "192.168.1.120",
+                                            "dns_servers": "192.168.1.1"}},
+        {"post": "/dhcp/lan/save", "form": {"range_start": "192.168.1.100", "range_end": "192.168.1.120",
+                                            "dns_servers": "192.168.1.1", "lease_time": "soon"}},
+        {"post": "/dhcp/lan/save", "form": {"range_start": "10.9.9.9", "range_end": "192.168.1.120",
+                                            "dns_servers": "192.168.1.1", "lease_time": ""}},
+        {"post": "/dhcp/lan/save", "form": {"range_start": "192.168.1.100"}},
+        {"post": "/dhcp/wan/save", "form": {"range_start": "1.1.1.1", "range_end": "1.1.1.2",
+                                            "dns_servers": "1.1.1.1"}},
+        {"post": "/dhcp/lan/reservations/add", "form": {"mac": "aa:bb:cc:dd:ee:02", "address": "192.168.1.51",
+                                                        "hostname": " printer "}},
+        {"post": "/dhcp/lan/reservations/add", "form": {"mac": "aa:bb:cc:dd:ee:01", "address": "192.168.1.52"}},
+        {"post": "/dhcp/lan/reservations/add", "form": {"mac": "zz", "address": "192.168.1.53"}},
+        {"post": "/dhcp/dmz/reservations/add", "form": {"mac": "aa:bb:cc:dd:ee:03", "address": "10.0.0.5"}},
+        {"post": "/dhcp/lan/reservations/delete/aa:bb:cc:dd:ee:02"},
+        {"post": "/dhcp/dmz/reservations/delete/aa:bb:cc:dd:ee:02"},
+        {"post": "/dhcp/guest/delete"},
+        {"post": "/dhcp/nothing/delete"},
+        {"get": "/dhcp"}]),
+    # -- segments --------------------------------------------------------------------
+    "segments/add": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG}}, [
+        *_login(), {"get": "/segments"}, {"get": "/segments?first_run=1"},
+        {"post": "/segments", "form": {}},
+        {"post": "/segments", "form": {"segment": ["dmz"]}},
+        {"post": "/segments", "form": {"segment": ["iot", "guest"]}},
+        {"post": "/segments", "form": {"segment": ["guest"]}},
+        {"get": "/segments"}, {"get": "/rules"}, {"get": "/dhcp"}]),
+    "segments/iot": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG + "nat:\n  masquerade:\n  - out_zone: wan\n"}}, [
+        *_login(), {"post": "/segments", "form": {"segment": ["iot", "guest"]}}, {"get": "/segments"}]),
+    "segments/no-lan": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": NO_LAN_CONFIG}}, [
+        *_login(), {"get": "/segments"}, {"post": "/segments", "form": {"segment": ["iot"]}}]),
+    "segments/overlap": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG.replace(
+        "192.168.1.1/24", "192.168.0.1/16")}}, [
+        *_login(), {"post": "/segments", "form": {"segment": ["guest"]}}]),
     # -- the dashboard's buttons -----------------------------------------------------
     "dashboard/apply": ({"accounts": [ADMIN]}, [
         *_login(), {"post": "/apply?dry_run=1"}, {"post": "/apply"}, {"get": "/"}],

@@ -259,6 +259,25 @@ type ApplyFetch struct {
 // ApplyCases is every recorded apply session.
 func ApplyCases() ([]ApplyCase, error) { return load[ApplyCase]("apply.jsonl") }
 
+// FormValue is a form field as the session sent it: one value, or a
+// list of them (the same name repeated, as a ticked group of checkboxes).
+type FormValue []string
+
+// UnmarshalJSON reads a string or a list of strings.
+func (f *FormValue) UnmarshalJSON(data []byte) error {
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		*f = FormValue{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err != nil {
+		return err
+	}
+	*f = many
+	return nil
+}
+
 // WebUIStep is one request of a webUI session and 1.x's answer: the
 // form or JSON body and the headers and cookies sent; the status, the
 // headers (but date, server and content-length) and the body (Hex when
@@ -266,20 +285,20 @@ func ApplyCases() ([]ApplyCase, error) { return load[ApplyCase]("apply.jsonl") }
 // with the replies, and the programs it ran. A step with only Advance
 // moves the clock that many seconds.
 type WebUIStep struct {
-	Advance         *float64          `json:"advance,omitempty"`
-	Method          string            `json:"method"`
-	Path            string            `json:"path"`
-	Form            map[string]string `json:"form"`
-	JSON            jsontext.Value    `json:"json"`
-	Headers         map[string]string `json:"headers"`
-	Cookies         map[string]string `json:"cookies"`
-	Status          int               `json:"status"`
-	ResponseHeaders [][2]string       `json:"response_headers"`
-	Helper          jsontext.Value    `json:"helper"`
-	Programs        jsontext.Value    `json:"programs"`
-	Body            *string           `json:"body,omitempty"`
-	BodyHex         string            `json:"body_hex,omitempty"`
-	BodySHA256      string            `json:"body_sha256,omitempty"`
+	Advance         *float64             `json:"advance,omitempty"`
+	Method          string               `json:"method"`
+	Path            string               `json:"path"`
+	Form            map[string]FormValue `json:"form"`
+	JSON            jsontext.Value       `json:"json"`
+	Headers         map[string]string    `json:"headers"`
+	Cookies         map[string]string    `json:"cookies"`
+	Status          int                  `json:"status"`
+	ResponseHeaders [][2]string          `json:"response_headers"`
+	Helper          jsontext.Value       `json:"helper"`
+	Programs        jsontext.Value       `json:"programs"`
+	Body            *string              `json:"body,omitempty"`
+	BodyHex         string               `json:"body_hex,omitempty"`
+	BodySHA256      string               `json:"body_sha256,omitempty"`
 }
 
 // WebUICase is one session with 1.x's webUI through Starlette's
@@ -318,6 +337,9 @@ type WebUIAnswer struct {
 	Times  *int           `json:"times,omitempty"`
 	Error  jsontext.Value `json:"error,omitempty"`
 	Reply  jsontext.Value `json:"reply,omitempty"`
+	// Save: the answer also writes the request's YAML to config.yaml, as
+	// the real save_config does.
+	Save bool `json:"save,omitempty"`
 }
 
 // WebUICases is every recorded webUI session.
