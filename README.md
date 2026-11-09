@@ -212,15 +212,20 @@ requests and prompt-injection cases.
 
 ## How FR_OS compares
 
-| Project | What to compare |
-| --- | --- |
-| **FR_OS Community Edition** | A Debian-based x86-64 homelab router with nftables, eBPF/XDP and an AI workflow that explains local evidence and requires operator approval for changes. |
-| **pfSense** | FreeBSD-based firewall and router with extensive web-managed networking features and an established package ecosystem. [pfSense documentation](https://docs.netgate.com/pfsense/en/latest/general/index.html) |
-| **OPNsense** | A stateful firewall with interface-based rules and its own workflow for policy, routing and administration. [OPNsense documentation](https://docs.opnsense.org/manual/firewall.html) |
-| **OpenWrt** | A Linux router distribution that also uses nftables through firewall4. Check device support and compare the configuration and operational model. [OpenWrt documentation](https://openwrt.org/docs/guide-user/firewall/netfilter_iptables/netfilter_management) |
+| Platform | Deployment focus | Traffic visibility and enforcement | Management workflow |
+| --- | --- | --- | --- |
+| **FR_OS Community Edition** | Debian-based x86-64 homelab router on your own hardware or VM | nftables and eBPF/XDP. Local DNS, TLS metadata and behavioural signals feed detection. | Local WebUI. AI Perimeter cites evidence and proposes changes for an administrator to approve. |
+| **pfSense** | FreeBSD-based firewall and router | Stateful firewall rules, routing and VPN capabilities, with packages for additional features. | Web-based administration and an established package ecosystem. [pfSense documentation](https://docs.netgate.com/pfsense/en/latest/general/index.html) |
+| **OPNsense** | Firewall and router for interface-based policy and routing | Stateful packet filtering, per-interface rules and policy-based routing. | Web-based policy management, with API support in the modern firewall rules implementation. [OPNsense documentation](https://docs.opnsense.org/manual/firewall.html) |
+| **OpenWrt** | Linux router distribution with device-specific builds | nftables through firewall4, with policy configured through UCI. | Choose hardware supported by OpenWrt and configure policy through its firewall tooling. [OpenWrt documentation](https://openwrt.org/docs/guide-user/firewall/netfilter_iptables/netfilter_management) |
+| **Cisco Secure Firewall (NGFW)** | Commercial enterprise firewall family for network and cloud deployments | Application visibility and control, Snort-based intrusion prevention, URL filtering and file or malware inspection. | Central policy, monitoring and investigation through Firewall Management Center. [Cisco NGFW overview](https://www.cisco.com/site/us/en/learn/topics/security/what-is-a-next-generation-firewall.html) · [Cisco Secure Firewall capabilities](https://www.cisco.com/c/en/us/products/collateral/security/firewalls/fm-secure-firewalls-fmc-cis-controls-v8-1-sb.html) |
+| **Palo Alto Networks NGFW** | Commercial enterprise firewall family for network and cloud deployments | App-ID and User-ID support application- and identity-aware policy. The platform supports threat prevention and configurable TLS decryption. | Manage devices individually or centrally with Panorama. [Palo Alto NGFW overview](https://www.paloaltonetworks.com/cyberpedia/what-is-a-next-generation-firewall-ngfw) · [Palo Alto Networks product capabilities](https://www.paloaltonetworks.com/network-security/next-generation-firewall) |
 
-Compare on your actual network and NICs if throughput, latency or driver
-support will determine the deployment.
+FR_OS's app and TLS visibility uses observable DNS names and handshake
+metadata. The enterprise NGFWs cover broader inspection and central policy
+management use cases. This table describes documented capabilities. For a
+deployment decision, verify model, subscription, hardware, throughput and
+support requirements separately.
 
 ## Contributing
 
