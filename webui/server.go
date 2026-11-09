@@ -75,7 +75,8 @@ func New(env Env, version, codename string) (*Server, error) {
 	s.pages = map[string]*template.Template{}
 	base := template.Must(template.New("").ParseFS(templateFS, "templates/base.html", "templates/auth_head.html"))
 	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login", "dashboard",
-		"rules", "nat", "interfaces", "dhcp", "segments"} {
+		"rules", "nat", "interfaces", "dhcp", "segments",
+		"ai_ids", "apps", "tls", "iot", "adblock", "xdp"} {
 		t := template.Must(template.Must(base.Clone()).ParseFS(templateFS, "templates/"+name+".html"))
 		s.pages[name] = t
 	}

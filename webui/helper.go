@@ -195,3 +195,18 @@ func (h helper) SaveConfig(yamlText string) (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "save_config", "yaml", yamlText), 10)
 }
 func (h helper) IPv6Status() (*config.Map, error) { return h.apply(cmdMap("cmd", "ipv6_status"), 10) }
+func (h helper) IoTIsolationStatus() (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "iot_isolation_status"), 10)
+}
+
+// IoTScan runs fr-iot-scan.service, which can take a while (1.x: 150 s).
+func (h helper) IoTScan() (*config.Map, error) { return h.apply(cmdMap("cmd", "iot_scan"), 150) }
+func (h helper) IoTSyncIsolation(macs []string) (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "iot_sync_isolation", "macs", macs), 10)
+}
+
+// RefreshAdblock downloads the lists (1.x: 60 s).
+func (h helper) RefreshAdblock() (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "refresh_adblock"), 60)
+}
+func (h helper) XDPStats() (*config.Map, error) { return h.apply(cmdMap("cmd", "xdp_stats"), 10) }

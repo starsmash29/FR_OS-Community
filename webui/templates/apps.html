@@ -1,0 +1,82 @@
+{{define "title"}}Applications - FR_OS{{end}}
+{{define "content"}}
+<h1>Applications</h1>
+<p class="muted">
+  Recognises which apps clients use from the names they look up through the
+  router's resolver and, optionally, the TLS server names (SNI) the XDP
+  filter sees -- nothing is decrypted. A "hit" is one lookup or one TLS
+  connection, a rough activity signal, not traffic volume. Apps are blocked
+  by the resolver answering "no such domain" for all of their names.
+</p>
+
+{{with .Data.ConfigError}}
+<div class="flash-error">Config does not currently pass validation: {{.}}</div>
+{{end}}
+
+<div class="card">
+  <h3>Settings</h3>
+  <form method="post" action="/apps/settings">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="enabled" value="true" {{if .Data.Enabled}}checked{{end}}> Enabled (identify apps and enforce the blocked list)</label>
+    <label class="checkbox-row"><input type="checkbox" name="observe_sni" value="true" {{if .Data.ObserveSNI}}checked{{end}}> Also observe TLS server names with the XDP filter (one journal line per TLS connection)</label>
+    <label class="checkbox-row"><input type="checkbox" name="block_via_xdp" value="true" {{if .Data.BlockViaXDP}}checked{{end}}> Also block apps in the XDP SNI filter (catches clients using their own DNS-over-HTTPS)</label>
+    <button type="submit">Save</button>
+  </form>
+  <h4>Prerequisites</h4>
+  <ul>
+    {{range .Data.Prerequisites}}
+    <li>{{if .OK}}<span class="badge badge-green">on</span>{{else}}<span class="badge">off</span>{{end}} {{.Text}}</li>
+    {{end}}
+  </ul>
+  <p class="muted">
+    Daemon <code>fr-appid</code>:
+    {{if .Data.DaemonActive}}<span class="badge badge-green">running</span>{{else}}<span class="badge">not running</span>{{end}}
+    {{with .Data.UsageGenerated}} -- usage last written {{.}}{{end}}.
+    The XDP filter only sees what an interface receives: attach it to the LAN-side interfaces, not the WAN.
+    It also misses names of 32 characters or more, QUIC (HTTP/3) and Encrypted Client Hello.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Apps (last 24 hours)</h3>
+  <form method="post" action="/apps/block">
+  {{.CSRFInput}}
+  <div class="scroll-table" style="max-height: 640px;">
+  <table>
+    <tr><th>Block</th><th>App</th><th>Category</th><th>Active clients (15 min)</th><th>Hits</th><th>Last seen</th><th>Clients</th></tr>
+    {{range .Data.Rows}}
+    <tr>
+      <td><input type="checkbox" name="blocked_apps" value="{{.ID}}" {{if .Blocked}}checked{{end}} aria-label="Block {{.Name}}"></td>
+      <td>{{.Name}}{{if .Blocked}} <span class="badge badge-red">blocked</span>{{end}}<br><span class="muted">{{.Names}} names</span></td>
+      <td>{{.Category}}</td>
+      <td>{{.ActiveClients}}</td>
+      <td>{{.Hits}}</td>
+      <td>{{or .LastSeen "-"}}</td>
+      <td>
+        {{if .Clients}}
+        <details><summary>{{len .Clients}}</summary>
+          <table>
+            {{range .Clients}}
+            <tr>
+              <td>{{.IP}}{{if .Label}}<br><span class="muted">{{.Label}}</span>{{end}}</td>
+              <td>{{.Hits}}</td>
+              <td>{{or .LastSeen "-"}}{{if .Active}} <span class="badge badge-green">active</span>{{end}}</td>
+              <td class="muted">{{.Sources}}</td>
+            </tr>
+            {{end}}
+          </table>
+        </details>
+        {{else}}-{{end}}
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+  <button type="submit">Save blocked apps</button>
+  </form>
+  <p class="muted">
+    App domain lists: <a href="{{.Data.Source}}">v2fly/domain-list-community</a>
+    ({{.Data.License}} license), commit <code>{{.Data.Ref}}</code>, generated {{.Data.Generated}}.
+  </p>
+</div>
+{{end}}

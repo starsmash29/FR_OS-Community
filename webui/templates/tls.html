@@ -1,0 +1,116 @@
+{{define "title"}}TLS Fingerprints - FR_OS{{end}}
+{{define "content"}}
+<h1>TLS Fingerprints</h1>
+<p class="muted">
+  Identifies <em>which TLS software</em> each device uses -- browser, app, library or
+  script -- from the unencrypted first message of every TLS connection (the
+  ClientHello), without decrypting anything. JA4 is stable per client software
+  (the recommended one); JA3 is shown too, but browsers that shuffle their
+  extensions produce a new JA3 on almost every connection.
+</p>
+
+{{with .Data.ConfigError}}
+<div class="flash-error">Config does not currently pass validation: {{.}}</div>
+{{end}}
+
+<div class="card">
+  <h3>Settings</h3>
+  <form method="post" action="/tls/settings">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="enabled" value="true" {{if .Data.Enabled}}checked{{end}}> Enabled (needs the XDP SNI filter, attached to the LAN-side interfaces)</label>
+    <label class="checkbox-row"><input type="checkbox" name="quarantine_on_match" value="true" {{if .Data.QuarantineOnMatch}}checked{{end}}> Quarantine a device that presents a blocklisted fingerprint (AI IDS quarantine set)</label>
+    <button type="submit">Save</button>
+  </form>
+  <p class="muted">
+    XDP filter: {{if .Data.XDPEnabled}}<span class="badge badge-green">on</span> ({{.Data.XDPInterfaces}}){{else}}<span class="badge">off</span>{{end}}
+    &middot; daemon <code>fr-tls-fp</code>: {{if .Data.DaemonActive}}<span class="badge badge-green">running</span>{{else}}<span class="badge">not running</span>{{end}}
+    {{if .Data.HasStats}}&middot; {{.Data.Hellos}} hellos fingerprinted, {{.Data.ParseErrors}} unparseable{{end}}
+    &middot; last written {{.Data.Generated}}.
+    {{if .Data.Learning}}<br><span class="badge badge-yellow">learning</span> "New fingerprint" events start 24 hours after the first run.{{end}}
+    Not visible: QUIC/HTTP-3 (UDP) connections, and anything a device sends over IPv6.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Events</h3>
+  {{if not .Data.Events}}<p class="muted">No events yet.</p>{{else}}
+  <div class="scroll-table" style="max-height:360px;">
+  <table>
+    <tr><th>When</th><th>What</th><th>Device</th><th>JA4</th><th>Server name</th><th>Action</th></tr>
+    {{range .Data.Events}}
+    <tr>
+      <td>{{.When}}</td>
+      <td>{{if eq .Type "blocklist"}}<span class="badge badge-red">blocklisted</span> {{.Label}}{{else}}<span class="badge badge-yellow">new fingerprint</span>{{end}}</td>
+      <td>{{.Client}}</td>
+      <td><code>{{.JA4}}</code></td>
+      <td>{{.SNI}}</td>
+      <td>{{.Action}}</td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Devices and their fingerprints</h3>
+  {{if not .Data.Rows}}<p class="muted">Nothing fingerprinted yet.</p>{{else}}
+  <div class="scroll-table" style="max-height:600px;">
+  <table>
+    <tr><th>Device</th><th>JA4</th><th>JA3 (latest)</th><th>Server names</th><th>Seen</th><th>Devices with it</th><th></th></tr>
+    {{range .Data.Rows}}
+    <tr>
+      <td>{{.Client}}{{if .Label}}<br><span class="muted">{{.Label}}</span>{{end}}</td>
+      <td><code>{{.JA4}}</code>{{if .Blocked}} <span class="badge badge-red">blocklisted</span>{{end}}</td>
+      <td><code>{{.JA3Latest}}</code>{{if gt .JA3Variants 1}}<br><span class="muted">{{.JA3Variants}} variants</span>{{end}}</td>
+      <td>{{.SNI}}</td>
+      <td>{{.Count}}&times;, last {{.LastSeen}}</td>
+      <td>{{.ClientsWithIt}}</td>
+      <td>
+        {{if not .Blocked}}
+        <form class="inline" method="post" action="/tls/block">
+          {{$.CSRFInput}}
+          <input type="hidden" name="fingerprint" value="{{.JA4}}">
+          <input type="hidden" name="label" value="blocked from {{.Client}}">
+          <button type="submit" class="danger">Block</button>
+        </form>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Blocklist</h3>
+  <p class="muted">JA4 fingerprints or 32-hex-digit JA3 hashes. Changes reach the running daemon within 30 seconds.</p>
+  {{if .Data.Blocklist}}
+  <table>
+    <tr><th>Fingerprint</th><th>Label</th><th></th></tr>
+    {{range .Data.Blocklist}}
+    <tr>
+      <td><code>{{.Fingerprint}}</code></td>
+      <td>{{.Label}}</td>
+      <td>
+        <form class="inline" method="post" action="/tls/unblock">
+          {{$.CSRFInput}}
+          <input type="hidden" name="fingerprint" value="{{.Fingerprint}}">
+          <button type="submit" class="secondary">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+  <form method="post" action="/tls/block">
+    {{.CSRFInput}}
+    <label>Fingerprint</label>
+    <input type="text" name="fingerprint" placeholder="t13d1516h2_8daaf6152771_e5627efa2ab1" required>
+    <label>Label (optional)</label>
+    <input type="text" name="label" maxlength="80">
+    <button type="submit">Add to blocklist</button>
+  </form>
+</div>
+{{end}}

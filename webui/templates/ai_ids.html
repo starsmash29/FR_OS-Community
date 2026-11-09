@@ -1,0 +1,95 @@
+{{define "title"}}AI IDS/IPS - FR_OS{{end}}
+{{define "content"}}
+<h1>AI IDS/IPS</h1>
+
+<p class="muted">
+  Real-time, out-of-band anomaly detection: connection-rate spikes,
+  destination-scan patterns, repeated XDP SNI-blocklist hits and -- with
+  DNS query logging on (Ad-Block screen) -- NXDOMAIN bursts, DGA-like
+  lookups and malware/phishing lookups are
+  scored against each host's own recent baseline by a separate
+  <code>fr-ai-ids</code> daemon, which quarantines a flagged IP in the
+  kernel via the privileged apply-helper.
+</p>
+
+{{with .Data.ConfigError}}
+<div class="flash-error">Config does not currently pass validation: {{.}}</div>
+{{end}}
+
+<div class="card">
+  <h3>Engine status</h3>
+  <p>
+    fr-ai-ids.service:
+    {{if .Data.DaemonActive}}
+    <span class="badge badge-green">running</span>
+    {{else}}
+    <span class="badge badge-red">not running</span>
+    {{end}}
+    &middot;
+    Detection:
+    {{if .Data.Enabled}}
+    <span class="badge badge-green">enabled</span>
+    {{else}}
+    <span class="badge badge-red">disabled</span>
+    {{end}}
+  </p>
+</div>
+
+<div class="card">
+  <h3>Settings</h3>
+  <form method="post" action="/ai-ids/settings">
+    {{.CSRFInput}}
+    <label><input type="checkbox" name="enabled" value="true" {{if .Data.Enabled}}checked{{end}} style="display:inline;width:auto;"> Enabled</label>
+    <label>Quarantine duration (seconds)</label>
+    <input type="number" name="quarantine_duration_seconds" value="{{.Data.QuarantineDuration}}" min="1" max="604800" required>
+    <label>Excluded MAC addresses (comma-separated)</label>
+    <input type="text" name="excluded_macs" value="{{.Data.ExcludedMACs}}" placeholder="aa:bb:cc:dd:ee:ff, 11:22:33:44:55:66">
+    <p class="muted">Resolved against DHCP static reservations to exclude their current IP from scoring/quarantine (e.g. a backup server or NAS that legitimately opens many connections).</p>
+    <button type="submit">Save settings</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Currently quarantined hosts</h3>
+  {{if .Data.HasQuarantineError}}
+  <p class="flash-error">Could not read kernel quarantine state: {{.Data.QuarantineError}}</p>
+  {{else if and (not .Data.Quarantined) (not .Data.QuarantinedMACs)}}
+  <p class="muted">No hosts currently quarantined.</p>
+  {{else}}
+  <table>
+    <tr><th>Held by</th><th>Remaining</th></tr>
+    {{range .Data.Quarantined}}
+    <tr><td>{{.Who}}</td><td>{{.ExpiresIn}}s</td></tr>
+    {{end}}
+    {{range .Data.QuarantinedMACs}}
+    <tr><td class="quarantined-mac">MAC {{.Who}} (all its IPv6 addresses)</td><td>{{.ExpiresIn}}s</td></tr>
+    {{end}}
+  </table>
+  <p class="muted">No manual early-release action yet -- a quarantine expires on its own via the kernel's native timeout (see ARCHITECTURE.md's open issues).</p>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Recent flagged events</h3>
+  {{if not .Data.Events}}
+  <p class="muted">No anomalies flagged yet.</p>
+  {{else}}
+  <table>
+    <tr><th>IP</th><th>Score</th><th>Reasons</th><th>Conn. rate</th><th>Unique dst. ratio</th><th>SNI blocks</th><th>NXDOMAIN names</th><th>DGA-like</th><th>Threat lookups</th></tr>
+    {{range .Data.Events}}
+    <tr>
+      <td>{{.IP}}{{if .MAC}} (MAC {{.MAC}}){{end}}</td>
+      <td>{{.Score}}</td>
+      <td>{{.Reasons}}</td>
+      <td>{{.ConnRate}}</td>
+      <td>{{.UniqueDstRatio}}</td>
+      <td>{{.SNIBlocks}}</td>
+      <td>{{.NXDomain}}</td>
+      <td>{{.DGA}}</td>
+      <td>{{.Threats}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</div>
+{{end}}

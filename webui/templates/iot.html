@@ -1,0 +1,120 @@
+{{define "title"}}IoT Devices - FR_OS{{end}}
+{{define "content"}}
+<h1>IoT Devices</h1>
+<p class="muted">
+  Discovers devices in the selected zones (DHCP leases, the ARP table and
+  an mDNS service query), classifies them by hardware vendor, advertised
+  services and hostname, and can isolate IoT devices by MAC address in the
+  router's own firewall. Isolation covers everything routed through this
+  box; devices on the same switch/Wi-Fi segment can still reach each other
+  directly -- put IoT gear in its own zone/VLAN for full separation.
+</p>
+
+{{with .Data.ConfigError}}
+<div class="flash-error">Config does not currently pass validation: {{.}}</div>
+{{end}}
+
+<div class="card">
+  <h3>Settings</h3>
+  <form method="post" action="/iot/settings">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="enabled" value="true" {{if .Data.Enabled}}checked{{end}}> Enabled</label>
+
+    <label>Zones to scan</label>
+    {{range .Data.Zones}}
+    <label class="checkbox-row"><input type="checkbox" name="zones" value="{{.Name}}" {{if .Selected}}checked{{end}}> {{.Name}}</label>
+    {{else}}
+    <p class="muted">No zones defined yet.</p>
+    {{end}}
+
+    <label class="checkbox-row"><input type="checkbox" name="auto_isolate" value="true" {{if .Data.AutoIsolate}}checked{{end}}> Automatically isolate devices classified as IoT (unless trusted)</label>
+
+    <label for="isolation_mode">Isolation mode</label>
+    <select id="isolation_mode" name="isolation_mode">
+      <option value="internet_only" {{if .Data.InternetOnly}}selected{{end}}>Internet only (no other zones, no router services except DHCP/DNS)</option>
+      <option value="block" {{if .Data.Block}}selected{{end}}>Block (DHCP/DNS only)</option>
+    </select>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Scan</h3>
+  <p class="muted">
+    Runs every 10 minutes via <code>fr-iot-scan.timer</code>.
+    {{with .Data.ScannedAt}}Last scan: {{.}}.{{else}}No scan has run yet.{{end}}
+  </p>
+  {{with .Data.ScanMessages}}<p class="muted">{{.}}</p>{{end}}
+  <form method="post" action="/iot/scan">
+    {{.CSRFInput}}
+    <button type="submit">Scan now</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Currently isolated (live kernel state)</h3>
+  {{if not .Data.Enabled}}
+  <p class="muted">IoT isolation is disabled.</p>
+  {{else if .Data.HasIsolationError}}
+  <p class="flash-error">Could not read kernel isolation state: {{.Data.IsolationError}}</p>
+  {{else if not .Data.HasLiveIsolated}}
+  <p class="muted">No devices isolated.</p>
+  {{else}}
+  <p>{{.Data.LiveIsolated}}</p>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Inventory</h3>
+  {{if not .Data.Devices}}
+  <p class="muted">No devices found yet.</p>
+  {{else}}
+  <div class="scroll-table" style="max-height: 520px;">
+  <table>
+    <tr><th>Device</th><th>Vendor</th><th>Services</th><th>Class</th><th>Why</th><th>State</th><th></th></tr>
+    {{range .Data.Devices}}
+    <tr>
+      <td><code>{{.MAC}}</code><br>{{.IP}}{{if .Hostname}}<br><span class="muted">{{.Hostname}}</span>{{end}}</td>
+      <td>{{.Vendor}}</td>
+      <td>{{.Services}}</td>
+      <td>
+        {{if eq .Category "iot"}}<span class="badge badge-yellow">IoT</span>
+        {{else if eq .Category "general"}}<span class="badge badge-green">general</span>
+        {{else}}<span class="badge">unknown</span>{{end}}
+        <br><span class="muted">score {{.Score}}</span>
+      </td>
+      <td class="muted">{{.Reasons}}</td>
+      <td>
+        {{if .LiveIsolated}}<span class="badge badge-red">isolated</span>{{end}}
+        {{if .Trusted}}<span class="badge badge-green">trusted</span>{{end}}
+        {{if .ManuallyIsolated}}<span class="badge">manually isolated</span>{{end}}
+      </td>
+      <td>
+        <form method="post" action="/iot/device" class="inline">
+          {{$.CSRFInput}}
+          <input type="hidden" name="mac" value="{{.MAC}}">
+          <input type="hidden" name="action" value="trust">
+          <button type="submit" class="secondary">Trust</button>
+        </form>
+        <form method="post" action="/iot/device" class="inline">
+          {{$.CSRFInput}}
+          <input type="hidden" name="mac" value="{{.MAC}}">
+          <input type="hidden" name="action" value="isolate">
+          <button type="submit" class="danger">Isolate</button>
+        </form>
+        {{if or .Trusted .ManuallyIsolated}}
+        <form method="post" action="/iot/device" class="inline">
+          {{$.CSRFInput}}
+          <input type="hidden" name="mac" value="{{.MAC}}">
+          <input type="hidden" name="action" value="clear">
+          <button type="submit" class="secondary">Clear</button>
+        </form>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
