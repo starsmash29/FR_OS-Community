@@ -30,7 +30,7 @@
 <p align="center">
   <a href="#installation--deployment"><strong>Start your first deployment</strong></a>
   · <a href="https://youtu.be/4aiUjXjpO1M"><strong>Watch AI Perimeter</strong></a>
-  · <a href="#how-fros-compares"><strong>Compare platforms</strong></a>
+  · <a href="#how-fr_os-compares"><strong>Compare platforms</strong></a>
   · <a href="#system-architecture"><strong>Explore the architecture</strong></a>
 </p>
 
