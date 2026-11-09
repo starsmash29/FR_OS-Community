@@ -184,3 +184,16 @@ replays them.
   sources failed in an order that doesn't change from one run to the
   next.
 
+## 2026-11-09: a second ruleset backup in the same second gets a file of its own
+
+1.x names a ruleset backup `ruleset-<UTC second>.nft`, so a backup
+written in the same second as the one before (an apply and its revert,
+or two applies, one right after the other) replaced it, and that
+rollback point was gone. FR_OS 2 gives the first backup of a second 1.x's
+name and the later ones `_01`, `_02`, ... (`apply.writeNewBackup`); these
+sort after it, so the newest backup is still the last one, the one
+`rollback` loads, and 1.x's own `list_backups` counts them. Cases: none
+of the recorded ones writes two backups in one second; the run of the
+1.x webUI against the Go helper (2026-11-09) showed it. Why: losing a
+rollback point silently is worse than a name 1.x never makes. The 1.x
+bug is to be reported there too.

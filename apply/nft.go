@@ -115,8 +115,8 @@ func backupRunning(run Runner, backupDir string, retention int, now time.Time) (
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(backupDir, "ruleset-"+now.UTC().Format("20060102T150405Z")+".nft")
-	if err := os.WriteFile(path, []byte("flush ruleset\n\n"+current), 0o644); err != nil {
+	path, err := writeNewBackup(backupDir, now, []byte("flush ruleset\n\n"+current))
+	if err != nil {
 		return "", err
 	}
 	backups, err := ListBackups(backupDir)
@@ -129,6 +129,35 @@ func backupRunning(run Runner, backupDir string, retention int, now time.Time) (
 		}
 	}
 	return path, nil
+}
+
+// writeNewBackup writes data to a backup file of its own. 1.x names a
+// backup by the second only, so a second backup in the same second (two
+// applies, or an apply and its revert, one right after the other)
+// replaced the first and lost that rollback point. The first backup of a
+// second keeps 1.x's name; later ones get _01, _02, ..., which sort after
+// it, so the newest is still last (testdata/reference/decisions.md).
+func writeNewBackup(backupDir string, now time.Time, data []byte) (string, error) {
+	stem := filepath.Join(backupDir, "ruleset-"+now.UTC().Format("20060102T150405Z"))
+	for n := 0; n < 100; n++ {
+		path := stem + ".nft"
+		if n > 0 {
+			path = fmt.Sprintf("%s_%02d.nft", stem, n)
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			return "", err
+		}
+		return path, f.Close()
+	}
+	return "", fmt.Errorf("more than 100 ruleset backups in one second in %s", backupDir)
 }
 
 // ListBackups are the ruleset backups, oldest first.
