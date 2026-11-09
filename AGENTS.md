@@ -57,14 +57,16 @@ commands that act on one host (a ban, a quarantine, a ZTNA sign-in, IoT
 isolation, the conntrack sample, the activity log) and the ones that
 read the system for the webUI's views (the firewall's drops, WireGuard,
 the XDP counters, IPv6, the listening sockets, the RAM modules, the IoT
-scan), through its
+scan), and moving the webUI's address and refreshing the ad-block
+lists, through its
 apply-helper against a fake system (every path under a directory of its
-own, every program answered from a table, steps made to fail one by
-one) and records the programs run, the replies and the files left. The
+own, every program and every download answered from a table, steps
+made to fail one by one) and records the programs run, the replies and the files left. The
 Go packages replay those cases:
 
-- the config package must load the same YAML to the same values, and
-  accept and refuse the same configs, with the same message;
+- the config package must load the same YAML to the same values, write
+  the same YAML for them (yaml.safe_dump), and accept and refuse the
+  same configs, with the same message;
 - the ruleset builder must produce the same nft script, byte for byte;
 - the apply-helper must give the same reply to the same request, and run
   nft with the same arguments;
@@ -145,13 +147,13 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 |---|---|
 | `cmd/` | Go binaries (one per service) |
 | `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
-| `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load` |
+| `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load`, and `config.DumpYAML`, held to its `safe_dump` |
 | `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
 | `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time |
 | `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.provision`, `frfw.transaction` and `frfw.apply`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
 | `appid/` | The application catalog (app control's domain names) |
-| `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader (a port of PyYAML) |
+| `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |

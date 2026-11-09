@@ -159,3 +159,28 @@ replays them.
   its own interpreter's `ssl.OPENSSL_VERSION_INFO`. The replay gives
   both the same version. Why: Go links no OpenSSL; the webUI's libssl
   is the host's, which `openssl version` reports.
+
+## 2026-11-09: moving the webUI, and refreshing the ad-block lists (phase 2c-3)
+
+- **A date reached by two YAML aliases** is written twice by
+  `config.DumpYAML`, where PyYAML's `safe_dump` anchors the one date
+  object (`&id001` and `*id001`). Cases: the yaml.jsonl texts
+  `a: &d 2026-11-01` / `b: *d` and `a: &t 2026-11-01 10:00:00` /
+  `b: [*t]` (`dumpDecided` in config/yamldump_test.go). Why: a date is
+  a value in Go, not an object with an identity; the text reads back to
+  the same values, and no setting of a config takes a date. Lists and
+  mappings keep their identity, and are anchored as in PyYAML.
+- **Ad-block downloads** have a 15 s limit to connect, for the TLS
+  handshake and for the response's headers, and 120 s and 64 MiB for
+  the whole download, where 1.x has 15 s for each blocking socket
+  operation and no size limit (AGENTS.md: every read from the network
+  has a size limit). A download that fails in any way counts as a failed
+  source, where 1.x lets a timeout while it reads the body through (the
+  peer gets no reply). The sources that failed are listed in the order
+  the config gives them, where 1.x lists them in the order their
+  downloads ended (Python's `as_completed`). Cases: none; the recording
+  answers every download from its table, and has at most one failed
+  source in a list of several. Why: a refresh must end, and say which
+  sources failed in an order that doesn't change from one run to the
+  next.
+

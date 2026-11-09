@@ -92,6 +92,10 @@ type YAMLCase struct {
 	Recursive bool           `json:"recursive,omitempty"`
 	Error     string         `json:"error,omitempty"`
 	Crash     string         `json:"crash,omitempty"`
+	// Dump is what yaml.safe_dump(value, sort_keys=False) wrote for the
+	// value loaded; DumpCrash the exception it raised instead.
+	Dump      *string `json:"dump,omitempty"`
+	DumpCrash string  `json:"dump_crash,omitempty"`
 }
 
 // YAMLConfigCase is parse_config of what yaml.safe_load built from a
@@ -235,6 +239,19 @@ type ApplyCase struct {
 	Files      map[string]*ApplyFile `json:"files"`
 	Leaks      []string              `json:"leaks"`
 	Decided    string                `json:"decided,omitempty"`
+	// Fetch answers the downloads (urllib.request.urlopen), by URL.
+	Fetch []ApplyFetch `json:"fetch,omitempty"`
+}
+
+// ApplyFetch is what one URL answers: a Body (Hex when it isn't
+// UTF-8), an HTTP Status with its Reason, or a URLError's Error.
+type ApplyFetch struct {
+	URL    string  `json:"url"`
+	Body   *string `json:"body,omitempty"`
+	Hex    string  `json:"hex,omitempty"`
+	Status int     `json:"status,omitempty"`
+	Reason string  `json:"reason,omitempty"`
+	Error  string  `json:"error,omitempty"`
 }
 
 // ApplyCases is every recorded apply session.

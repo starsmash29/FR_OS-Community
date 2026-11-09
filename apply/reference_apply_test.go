@@ -145,6 +145,7 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	sys.OpenSSLVersion = func() ([3]int, string) { return version, openssl[3].(string) }
 	sys.Sleep = func(time.Duration) {}
 	sys.Chown = func(string, int, int) error { return nil } // as the recording's: no accounts
+	sys.Fetch = func(url string) ([]byte, error) { return fetchAnswer(c.Fetch, url) }
 	p := sys.Paths
 	s := &helper.Server{Env: helper.Env{
 		ConfigPath: p.Config, BackupDir: p.BackupDir, KeaConfigPath: p.KeaConfig,
@@ -550,4 +551,24 @@ func sameFile(a, b *reference.ApplyFile) bool {
 	}
 	return a.Mode == b.Mode && a.Hex == b.Hex && a.SHA256 == b.SHA256 &&
 		(a.Text == nil) == (b.Text == nil) && (a.Text == nil || *a.Text == *b.Text)
+}
+
+// fetchAnswer is the case's answer for a download: a body, or a failed
+// one (1.x reports a failure by its URL alone).
+func fetchAnswer(table []reference.ApplyFetch, url string) ([]byte, error) {
+	for _, a := range table {
+		if a.URL != url {
+			continue
+		}
+		switch {
+		case a.Status != 0:
+			return nil, fmt.Errorf("HTTP Error %d: %s", a.Status, a.Reason)
+		case a.Error != "":
+			return nil, errors.New(a.Error)
+		case a.Body != nil:
+			return []byte(*a.Body), nil
+		}
+		return hex.DecodeString(a.Hex)
+	}
+	return nil, errors.New("not in the case's table")
 }

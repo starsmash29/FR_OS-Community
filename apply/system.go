@@ -134,6 +134,9 @@ type System struct {
 	// Chown is os.Chown, for the files a root apply hands to an account
 	// (the sensors' copy, the audit log).
 	Chown func(path string, uid, gid int) error
+	// Fetch downloads one ad-block list (HTTPFetch): the only thing
+	// fetched from the internet, and only for a refresh.
+	Fetch func(url string) ([]byte, error)
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;
@@ -150,6 +153,7 @@ func DefaultSystem() *System {
 		ConfirmPoll:    defaultConfirmWait,
 		Sleep:          time.Sleep,
 		Chown:          os.Chown,
+		Fetch:          HTTPFetch,
 	}
 }
 
