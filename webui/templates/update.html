@@ -1,0 +1,127 @@
+{{define "title"}}Update - FR_OS{{end}}
+{{define "content"}}{{$d := .Data}}
+<h1>Update</h1>
+
+<div class="card">
+  <h3>Version</h3>
+  <p>Installed: <span class="badge">{{$d.Installed}}</span></p>
+  <p class="muted">Checked against <code>{{$d.Repo}}</code> (set via config.yaml's <code>update.repo</code>).</p>
+
+  {{if $d.CheckError}}
+  <div class="flash-error">Could not check for updates: {{$d.CheckError}}</div>
+  {{else if $d.Check}}
+    {{if not $d.Check.Latest}}
+    <p class="muted">No releases have been published for this repo yet.</p>
+    {{else if $d.Check.UpdateAvailable}}
+    <p><strong>Update available: {{$d.LatestLabel}}</strong>
+      {{if $d.Check.Latest.Security}}<span class="badge badge-red">security release</span>{{end}}</p>
+    {{if $d.Check.Latest.Notes}}
+    <pre>{{$d.Check.Latest.Notes}}</pre>
+    {{end}}
+    <form method="post" action="/update/apply" data-confirm="Update to {{$d.Check.Latest.Version}} now? The webUI will restart afterwards.">
+      {{.CSRFInput}}
+      <input type="hidden" name="version" value="{{$d.Check.Latest.Version}}">
+      <button type="submit">Update to {{$d.Check.Latest.Version}}</button>
+    </form>
+    {{else}}
+    <p class="muted">Already up to date (latest published release: {{$d.LatestLabel}}).</p>
+    {{end}}
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Security updates</h3>
+  <p class="muted">The router checks for new releases twice a day{{if $d.PeriodicAt}} (last: {{$d.PeriodicAt}}){{end}}.
+    A security release shows a red banner on every page. How fast we fix vulnerabilities is in SECURITY.md.</p>
+  {{if $d.PeriodicError}}<div class="flash-error">The last periodic check failed: {{$d.PeriodicError}}</div>{{end}}
+  {{if $d.AutoInstallError}}<div class="flash-error">Installing security release {{$d.PeriodicLatest}} automatically failed: {{$d.AutoInstallError}}</div>{{end}}
+  <form method="post" action="/update/auto-security">
+    {{.CSRFInput}}
+    <label><input type="checkbox" id="auto-security" name="enabled" value="true"{{if $d.AutoInstallSecurity}} checked{{end}}>
+      Install security updates automatically</label>
+    <p class="muted">Only releases marked as security releases, and only after their signature verifies. The webUI restarts
+      afterwards, and the dashboard shows an alert saying what was installed.</p>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card" id="kernel">
+  <h3>Kernel</h3>
+  {{if $d.KernelError}}
+  <div class="flash-error">Kernel status unavailable: {{$d.KernelError}}</div>
+  {{else if $d.Kernel}}{{$k := $d.Kernel}}
+  <p id="kernel-summary">{{$k.Summary}}</p>
+  {{if $k.LastCheck}}
+  <p class="muted">Last check for Debian's kernel fixes ({{$k.LastCheckAt}}):
+    {{if $k.LastCheckFailed}}<span class="badge badge-red">failed</span>{{end}} {{$k.LastCheckMessage}}</p>
+  {{end}}
+  {{if $k.CanTry}}
+  <p><strong>Kernel {{$k.Ready}} is ready to try.</strong>
+    Trying it reboots the router into it once; the router keeps it only if it comes up on it -- the firewall loaded,
+    its network ports there, this webUI answering. Otherwise the image's own kernel boots again by itself, with a
+    security alert.</p>
+  <form method="post" action="/update/kernel/try" data-confirm="Reboot the router now to try kernel {{$k.Ready}}?">
+    {{.CSRFInput}}
+    <button type="submit" id="kernel-try">Try kernel {{$k.Ready}} (reboots the router)</button>
+  </form>
+  {{end}}
+  {{if $k.CanCancel}}
+  <form method="post" action="/update/kernel/cancel" data-confirm="Go back to the image's own kernel at the next reboot?">
+    {{.CSRFInput}}
+    <button type="submit" class="danger">Back to the image's kernel</button>
+  </form>
+  {{end}}
+  {{if $k.Available}}
+  <form method="post" action="/update/kernel/check">
+    {{.CSRFInput}}
+    <button type="submit" id="kernel-check">Check for a newer kernel now</button>
+  </form>
+  {{end}}
+  {{end}}
+  <form method="post" action="/update/kernel-updates">
+    {{.CSRFInput}}
+    <label><input type="checkbox" id="kernel-updates" name="enabled" value="true"{{if $d.KernelUpdates}} checked{{end}}>
+      Fetch Debian's kernel fixes daily</label>
+    <p class="muted">From the Debian archive, its signatures checked by apt -- the same archive the daily userspace
+      security updates come from. A new kernel is only made ready; nothing reboots until you press "Try".</p>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Rollback</h3>
+  {{if $d.Previous}}
+  <p class="muted">Previously running: {{$d.Previous}}</p>
+  <form method="post" action="/update/rollback" data-confirm="Roll back to {{$d.Previous}} now? The webUI will restart afterwards.">
+    {{.CSRFInput}}
+    <button type="submit" class="danger">Roll back to {{$d.Previous}}</button>
+  </form>
+  {{else}}
+  <p class="muted">No previous version recorded yet -- nothing to roll back to.</p>
+  {{end}}
+</div>
+
+{{if $d.LastUpdate}}
+<div class="card">
+  <h3>Last update attempt</h3>
+  <table>
+    <tr><th>Action</th><td>{{$d.Last "action"}}</td></tr>
+    <tr><th>Version</th><td>{{$d.Last "version"}}</td></tr>
+    <tr><th>When</th><td>{{$d.Last "applied_at"}}</td></tr>
+    <tr><th>Status</th><td><span class="badge">{{$d.Last "status"}}</span></td></tr>
+    {{if $d.HasLastMessage}}
+    <tr><th>Message</th><td>{{$d.Last "message"}}</td></tr>
+    {{end}}
+  </table>
+</div>
+{{end}}
+
+<div class="card">
+  <p class="muted">
+    Updates are installed from {{$d.Repo}}'s GitHub releases over HTTPS, and only
+    when the release's signature (SHA256SUMS.sig) verifies against the key this
+    router ships with. See ARCHITECTURE.md's update mechanism section for exactly
+    what "update" and "rollback" do.
+  </p>
+</div>
+{{end}}

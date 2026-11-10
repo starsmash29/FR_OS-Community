@@ -36,6 +36,9 @@ type Env struct {
 	Kernel func() string
 	// CPUs is os.cpu_count(), 0 when not known.
 	CPUs func() int
+	// Fetch is an HTTPS GET for the update check: the status and the
+	// body, or why the request couldn't be made.
+	Fetch func(url string, timeout float64) (status int, body []byte, err error)
 	// Disk is the used and total bytes of the file system at path
 	// (statvfs), ok false when it can't be read.
 	Disk func(path string) (used, total int64, ok bool)
@@ -65,6 +68,7 @@ func (p Paths) LoginGuard() string  { return p.at("/etc/fr_os/webui/login_guard.
 func (p Paths) AlertsSeen() string  { return p.at("/etc/fr_os/webui/alerts_seen.json") }
 func (p Paths) AuditLog() string    { return p.at("/var/log/fr_os/audit.log") }
 func (p Paths) UpdateCheck() string { return p.at("/etc/fr_os/update_check.json") }
+func (p Paths) UpdateState() string { return p.at("/etc/fr_os/update_state.json") }
 func (p Paths) ApplySocket() string { return p.at("/run/fr_os/apply.sock") }
 func (p Paths) UpdateSocket() string {
 	return p.at("/run/fr_os/update.sock")
@@ -82,6 +86,7 @@ func DefaultEnv() Env {
 		Kernel: kernelRelease,
 		CPUs:   runtime.NumCPU,
 		Disk:   diskUsage,
+		Fetch:  fetchRelease,
 	}
 }
 

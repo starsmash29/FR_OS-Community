@@ -1,0 +1,26 @@
+{{define "title"}}Security score - FR_OS{{end}}
+{{define "content"}}{{$d := .Data}}
+<h1>Security score</h1>
+<p class="muted">The hardening checklist: what attackers used against firewalls in 2026, checked against this router.
+  Each item links to the screen that fixes it. Unknown items don't count either way.</p>
+<div class="card status-card">
+  <span class="badge {{if eq $d.Percent 100}}badge-green{{else if ge $d.Percent 70}}badge-yellow{{else}}badge-red{{end}}" id="score">{{$d.Percent}}%</span>
+  <dl>
+    <div><dt>Passed</dt><dd>{{$d.Passed}} / {{$d.Known}}</dd></div>
+    <div><dt>Open</dt><dd>{{len $d.Open}}</dd></div>
+  </dl>
+</div>
+<div class="card">
+  <table>
+    <tr><th></th><th>Check</th><th>Status</th><th></th></tr>
+    {{range $d.Checks}}
+    <tr>
+      <td>{{if eq .State "ok"}}<span class="badge badge-green">ok</span>{{else if eq .State "fail"}}<span class="badge badge-red">open</span>{{else}}<span class="badge">unknown</span>{{end}}</td>
+      <td>{{.Title}} <span class="muted">({{.Lesson}})</span></td>
+      <td>{{.Detail}}</td>
+      <td>{{if ne .State "ok"}}<a href="{{.Link}}">fix</a>{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{end}}

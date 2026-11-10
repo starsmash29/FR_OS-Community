@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -130,6 +131,36 @@ func (f *fakeHelpers) send(socketPath string, cmd *config.Map, timeout float64, 
 	return again, nil
 }
 
+// fetch is the harness's _Fake.fetch: the update check's GitHub
+// requests answer from the same table, under the "https" socket.
+func (f *fakeHelpers) fetch(url string, timeout float64) (int, []byte, error) {
+	request := config.NewMap()
+	request.Set("url", url)
+	call := config.NewMap()
+	call.Set("socket", "https")
+	call.Set("request", request)
+	call.Set("timeout", timeout)
+	defer func() { f.calls = append(f.calls, call) }()
+	a := f.answer(url, "https")
+	switch {
+	case a == nil:
+		return 0, nil, fmt.Errorf("no answer for %s", url)
+	case a.Status != 0:
+		call.Set("status", big.NewInt(int64(a.Status)))
+		return a.Status, nil, nil
+	case a.Reason != "":
+		err := fmt.Errorf("<urlopen error %s>", a.Reason)
+		call.Set("error", fmt.Sprintf("could not reach %s: %s", url, err))
+		return 0, nil, err
+	}
+	reply, err := config.ParseJSON(a.Reply)
+	if err != nil {
+		return 0, nil, err
+	}
+	call.Set("reply", reply)
+	return 200, a.Reply, nil
+}
+
 // skip uses up what a skipped step's helper requests used up in 1.x.
 func (f *fakeHelpers) skip(t *testing.T, recorded []byte) {
 	v, err := config.ParseJSON(recorded)
@@ -175,6 +206,7 @@ func replay(t *testing.T, c reference.WebUICase) {
 		Local:  time.UTC, // the harness runs with TZ=UTC
 		Paths:  Paths{Root: root},
 		Send:   helpers.send,
+		Fetch:  helpers.fetch,
 		Run:    programs.run,
 		Kernel: func() string { return c.Uname[2] },
 		CPUs:   func() int { return c.CPUs },
@@ -227,6 +259,17 @@ func replay(t *testing.T, c reference.WebUICase) {
 		recorded, err := config.ParseJSON(step.Helper)
 		if err != nil {
 			t.Fatal(err)
+		}
+		// A timeout 1.x passes as an int (update_client.kernel's 60) is
+		// the same timeout: only the number's type differs.
+		list, _ := recorded.([]config.Value)
+		for _, c := range list {
+			if m, ok := c.(*config.Map); ok {
+				if n, ok := field(m, "timeout").(*big.Int); ok {
+					f, _ := new(big.Float).SetInt(n).Float64()
+					m.Set("timeout", f)
+				}
+			}
 		}
 		want, _ := config.PyJSON(recorded, -1, true)
 		if rooted(got) != want {

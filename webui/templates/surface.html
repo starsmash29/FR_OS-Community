@@ -1,0 +1,86 @@
+{{define "title"}}Attack surface - FR_OS{{end}}
+{{define "content"}}{{$d := .Data}}
+<h1>Attack surface</h1>
+<p class="muted">
+  Every port something on this router listens on, and from which zone the firewall lets a new connection
+  reach it -- worked out from what is running now and the saved config. Anything reachable from an
+  internet-facing zone is listed first. Loopback-only services are not reachable from any zone.
+</p>
+
+{{if $d.Error}}<div class="flash-error">{{$d.Error}}</div>{{end}}
+
+{{if not $d.Error}}
+{{if $d.Exposed}}
+<div class="flash-error">
+  {{len $d.Exposed}} service{{if ne (len $d.Exposed) 1}}s{{end}} reachable from the internet side
+  ({{$d.InternetList}}):
+  {{$d.ExposedList}}.
+  {{if $d.AllowWAN}}Management is open to the WAN (management.allow_wan) -- see System.{{end}}
+  Close what you don't need there, or reach it over a VPN instead.
+</div>
+{{else}}
+<div class="flash-success">Nothing is reachable from an internet-facing zone ({{or $d.InternetList "none"}}).</div>
+{{end}}
+
+{{if $d.Unneeded}}
+<div class="flash-error" id="unneeded">
+  {{len $d.Unneeded}} reachable service{{if ne (len $d.Unneeded) 1}}s{{end}} nothing in FR_OS's configuration needs:
+  {{$d.UnneededList}}.
+  Stop or uninstall {{if ne (len $d.Unneeded) 1}}them{{else}}it{{end}} -- every listening service is something to attack (security-lessons K7).
+</div>
+{{else}}
+<div class="flash-success" id="unneeded">Every reachable service is one the configuration needs.</div>
+{{end}}
+
+<div class="card">
+  <h3>Listening services</h3>
+  <div class="scroll-table">
+  <table>
+    <tr>
+      <th>Port</th><th>Service</th><th>Needed by</th><th>Bound to</th>
+      {{range $d.Zones}}<th>{{.}}{{if index $d.Internet .}} <span class="badge badge-red">internet</span>{{end}}</th>{{end}}
+    </tr>
+    {{range $d.Rows}}
+    <tr>
+      <td><code>{{.Listener.Proto}}/{{.Listener.Port}}</code></td>
+      <td>{{.Listener.Label}}</td>
+      <td>{{if .Needed}}<span class="muted">{{.Needed}}</span>{{else if .Reachable}}<span class="badge badge-red">not needed</span>{{else}}<span class="muted">-</span>{{end}}</td>
+      <td><code>{{.Listener.Address}}{{if .Listener.Device}}%{{.Listener.Device}}{{end}}</code>
+        {{if .Listener.Loopback}}<span class="muted">(loopback)</span>{{else if and .Listener.Wildcard (not .Listener.Device)}}<span class="muted">(every address)</span>{{end}}</td>
+      {{range .Cells}}
+      <td>
+        {{if not .Has}}<span class="muted">-</span>
+        {{else if eq .State "open"}}<span class="badge {{if .Internet}}badge-red{{else}}badge-yellow{{end}}" title="{{.Why}}">open</span>
+        {{else if eq .State "restricted"}}<span class="badge badge-yellow" title="{{.Why}}">restricted</span>
+        {{else}}<span class="badge badge-green" title="{{.Why}}">closed</span>{{end}}
+        {{if and .Has (ne .State "closed")}}<div class="muted" style="font-size:11px;">{{.Why}}</div>{{end}}
+      </td>
+      {{end}}
+    </tr>
+    {{else}}
+    <tr><td colspan="{{$d.Colspan}}" class="muted">Nothing is listening.</td></tr>
+    {{end}}
+  </table>
+  </div>
+  <p class="muted">
+    <strong>open</strong>: any host in that zone can connect. <strong>restricted</strong>: only some
+    (by source address, device, ZTNA sign-in or time of day -- hover for the rule).
+    <strong>closed</strong>: the input chain drops it. "-": the service isn't bound to an address in that zone.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Check it from the outside</h3>
+  <p class="muted">
+    This view reads the router's own configuration; it can't see what your ISP or an upstream router does,
+    and port forwards to other hosts aren't listed here (they are on the NAT screen). To see what the
+    internet really sees, scan the WAN address from a machine <em>outside</em> your network, for example:
+  </p>
+  {{range $d.WANAddresses}}
+  <pre><code>nmap -Pn -sS -sU --top-ports 1000 {{.}}</code></pre>
+  {{else}}
+  <p class="muted">No WAN address is up right now.</p>
+  {{end}}
+</div>
+{{end}}
+{{end}}

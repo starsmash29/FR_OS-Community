@@ -179,6 +179,11 @@ func (h helper) BanIP(ip string, seconds int) (*config.Map, error) {
 func (h helper) IDSQuarantineStatus() (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "ids_quarantine_status"), 10)
 }
+
+// KernelStatus is the update-helper's kernel_status (ROADMAP SEC-14).
+func (h helper) KernelStatus() (*config.Map, error) {
+	return h.send(h.env.Paths.UpdateSocket(), cmdMap("cmd", "kernel_status"), 60)
+}
 func (h helper) ListeningSockets() (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "listening_sockets"), 10)
 }

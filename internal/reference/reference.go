@@ -340,6 +340,10 @@ type WebUIAnswer struct {
 	// Save: the answer also writes the request's YAML to config.yaml, as
 	// the real save_config does.
 	Save bool `json:"save,omitempty"`
+	// For the update check's GitHub requests (Socket "https", Cmd the
+	// URL): Status is an HTTP error, Reason a connection that failed.
+	Status int    `json:"status,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // WebUICases is every recorded webUI session.
