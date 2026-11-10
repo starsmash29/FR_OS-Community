@@ -79,7 +79,8 @@ func New(env Env, version, codename string) (*Server, error) {
 	for _, name := range []string{"login", "setup", "account", "users", "mfa_account", "mfa_login", "dashboard",
 		"rules", "nat", "interfaces", "dhcp", "segments",
 		"ai_ids", "apps", "tls", "iot", "adblock", "xdp",
-		"ztna", "ztna_login", "ztna_status", "vpn", "vpn_peer", "system"} {
+		"ztna", "ztna_login", "ztna_status", "vpn", "vpn_peer", "system",
+		"security", "surface", "update"} {
 		t := template.Must(template.Must(base.Clone()).ParseFS(templateFS, "templates/"+name+".html"))
 		s.pages[name] = t
 	}

@@ -17,6 +17,10 @@ and no socket is opened:
   and whose "times" are not used up; a command with no entry gets the
   transport error a missing socket gives), and every request is recorded
   with its socket and timeout;
+- the update screen's request to GitHub for the latest release
+  (frfw.update._fetch_json) answers from the same table, under the
+  "https" socket with the URL as the command: its JSON, an HTTP error
+  ("status") or a connection that failed ("reason");
 - the clock starts at FIXED_NOW and moves only where a step says so;
   randomness is a recorded byte stream (secrets.token_bytes, token_hex,
   token_urlsafe and pyotp's base32 secret all draw from it), so the
@@ -40,6 +44,7 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote_plus
@@ -67,6 +72,15 @@ RANDOM_BYTES = 1 << 14
 
 APPLY_SOCKET = "apply.sock"
 UPDATE_SOCKET = "update.sock"
+
+#: The update check's GitHub API requests answer from the same table,
+#: under this "socket", with the URL as the command.
+HTTPS = "https"
+
+#: Where FR_OS 2 looks for its releases unless update.repo says
+#: otherwise (decisions.md, 3c-1).
+COMMUNITY_REPO = "starsmash29/FR_OS-Community"
+LATEST_URL = f"https://api.github.com/repos/{COMMUNITY_REPO}/releases/latest"
 
 #: The TLS library the system screen names (pqc.ssl.OPENSSL_VERSION).
 TLS_LIBRARY = "Go crypto/tls (X25519MLKEM768)"
@@ -120,6 +134,8 @@ BASE = [
     {"cmd": "apply", "reply": {"ok": True, "message": "applied"}},
     {"cmd": "save_config", "save": True, "reply": {"ok": True, "message": "Config saved to /etc/fr_os/config.yaml"}},
     {"cmd": "ping", "socket": UPDATE_SOCKET, "reply": {"ok": True, "message": "pong"}},
+    # A router that can't resolve api.github.com.
+    {"cmd": LATEST_URL, "socket": HTTPS, "reason": "[Errno -3] Temporary failure in name resolution"},
 ]
 
 CONFIG = """\
@@ -175,6 +191,30 @@ class _Fake:
         self.used += n
         return out
 
+    def fetch(self, url: str, timeout: float) -> object:
+        """frfw.update._fetch_json: an entry with the URL answers its JSON,
+        an HTTP error ("status") or a failed connection ("reason")."""
+        call = {"socket": HTTPS, "request": {"url": url}, "timeout": timeout}
+        for entry in self.table:
+            if entry.get("socket") != HTTPS or entry["cmd"] != url:
+                continue
+            if "times" in entry:
+                if entry["times"] == 0:
+                    continue
+                entry["times"] -= 1
+            if "status" in entry:
+                self.calls.append({**call, "status": entry["status"]})
+                raise urllib.error.HTTPError(url, entry["status"], "error", {}, None)
+            if "reason" in entry:
+                from frfw import update as update_mod
+
+                message = f"could not reach {url}: <urlopen error {entry['reason']}>"
+                self.calls.append({**call, "error": message})
+                raise update_mod.UpdateError(message)
+            self.calls.append({**call, "reply": entry["reply"]})
+            return json.loads(json.dumps(entry["reply"]))
+        raise AssertionError(f"no answer for {url}")
+
     def send(self, cmd: dict, socket_path, timeout: float = 10.0, max_bytes: int = 0) -> dict:
         call = {"socket": Path(socket_path).name, "request": cmd, "timeout": timeout}
         for entry in self.table:
@@ -200,6 +240,7 @@ def webui(monkeypatch, tmp_path):
     from importlib import metadata
 
     from frfw import integrity, pqc, wireguard
+    from frfw import update as update_mod
     from frfw.webui import audit
 
     import test_fros_apply_cases as system
@@ -247,6 +288,10 @@ def webui(monkeypatch, tmp_path):
         generate=lambda: real_x25519.from_private_bytes(state["fake"].bytes(32)),
         from_private_bytes=real_x25519.from_private_bytes))
     monkeypatch.setattr(audit, "_writers", {})
+    # The update screen asks GitHub for FR_OS 2's latest release
+    # (decisions.md, 3c-1), through the case's table.
+    monkeypatch.setattr(update_mod, "DEFAULT_REPO", COMMUNITY_REPO)
+    monkeypatch.setattr(update_mod, "_fetch_json", lambda url, timeout: state["fake"].fetch(url, timeout))
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: state["system"].run(*a, **k))
     # The rules screen and the schedules read the wall clock through
     # datetime.now, which doesn't go through time.time.
@@ -683,6 +728,10 @@ LISTENERS = [
     {"proto": "udp", "address": "0.0.0.0", "port": 53530, "device": None, "process": None},
     {"proto": "tcp", "address": "192.168.20.1", "port": 1883, "device": None, "process": "mosquitto"},
 ]
+
+#: The interfaces' addresses the attack surface sees with LISTENERS.
+SURFACE_ADDRESSES = {"eth0": ["203.0.113.5", "fe80::1"], "eth1": ["192.168.1.1", "2001:db8::1"],
+                     "eth2": ["192.168.20.1"], "lo": ["127.0.0.1"]}
 
 DROPS = [{"ts": NOW - 60 * i, "chain": "input" if i % 3 else "forward", "src": f"203.0.113.{i}",
           "dst": "203.0.113.5" if i % 4 else None, "proto": "tcp" if i % 2 else "udp",
@@ -1650,6 +1699,111 @@ SESSIONS = {
         [{"post": "/login", "form": {"username": "kolos", "password": ADMIN["password"]}, "csrf": None},
          {"post": "/login/mfa/totp", "form": {"code": _totp}, "csrf": None}, {"get": "/"}],
         [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS[:2], "addresses": {}}}]),
+    # -- the security checklist --------------------------------------------------------
+    "security/show": ({"accounts": [ADMIN, VIEWER]}, [
+        *_login(), {"get": "/security"}, {"post": "/logout"}, *_login(VIEWER), {"get": "/security"}]),
+    "security/everything": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FULL_CONFIG,
+        "etc/fr_os/update_check.json": json.dumps({"current_version": frfw.__version__, "latest_version": "9.9.9",
+                                                   "update_available": True, "security": True})}},
+        [*_login(), {"get": "/security"}],
+        [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS, "addresses": SURFACE_ADDRESSES}}]),
+    "security/clean": ({"accounts": [{**ADMIN, "totp": TOTP_SECRET}], "files": {
+        "etc/fr_os/config.yaml": CLEAN_CONFIG,
+        "etc/fr_os/update_check.json": json.dumps({"current_version": frfw.__version__,
+                                                   "update_available": False})}},
+        [*_login(), {"post": "/login/mfa/totp", "form": {"code": _totp}, "csrf": None}, {"get": "/security"}],
+        [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS[:2], "addresses": {}}}]),
+    "security/invalid": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": "version: 1\nzones: []\n"}},
+                         [*_login(), {"get": "/security"}]),
+    "security/sockets-refused": ({"accounts": [ADMIN]}, [*_login(), {"get": "/security"}],
+                                 [{"cmd": "listening_sockets", "reply": {"ok": False, "message": "ss failed"}}]),
+    # 1.x catches only OSError around listening_sockets here.
+    "security/helper-gone": ({"accounts": [ADMIN]}, [*_login(), {"get": "/security"}],
+                             [{"cmd": "listening_sockets", "error": True}]),
+    "security/anonymous": ({"accounts": [ADMIN]}, [{"get": "/security"}, {"get": "/surface"}, {"get": "/update"}]),
+    # -- the attack surface --------------------------------------------------------------
+    "surface/show": ({"accounts": [ADMIN, VIEWER], "files": {"etc/fr_os/config.yaml": FULL_CONFIG}},
+        [*_login(), {"get": "/surface"}, {"post": "/logout"}, *_login(VIEWER), {"get": "/surface"}],
+        [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS, "addresses": SURFACE_ADDRESSES}}]),
+    "surface/allow-wan": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CONFIG + "management:\n  allow_wan: true\n"}},
+        [*_login(), {"get": "/surface"}],
+        [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": LISTENERS[:3], "addresses": {
+            "eth0": ["198.51.100.7", "fe80::2"], "eth1": ["192.168.1.1"]}}}]),
+    "surface/needed": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": CLEAN_CONFIG}},
+        [*_login(), {"get": "/surface"}],
+        [{"cmd": "listening_sockets", "reply": {"ok": True, "listeners": [LISTENERS[0], LISTENERS[1], LISTENERS[3]],
+                                                "addresses": {}}}]),
+    "surface/quiet": ({"accounts": [ADMIN]}, [*_login(), {"get": "/surface"}]),
+    "surface/invalid": ({"accounts": [ADMIN], "files": {"etc/fr_os/config.yaml": "version: 1\nzones: []\n"}},
+                        [*_login(), {"get": "/surface"}]),
+    "surface/refused": ({"accounts": [ADMIN]}, [*_login(), {"get": "/surface"}, {"get": "/surface"}],
+                        [{"cmd": "listening_sockets", "times": 1, "reply": {"ok": False, "message": "ss failed"}},
+                         {"cmd": "listening_sockets", "reply": {"ok": False}}]),
+    "surface/helper-gone": ({"accounts": [ADMIN]}, [*_login(), {"get": "/surface"}],
+                            [{"cmd": "listening_sockets", "error": True}]),
+    # -- the update screen (read-only: what the update-helper does is a later phase) -------
+    "update/offline": ({"accounts": [ADMIN, VIEWER]}, [
+        *_login(), {"get": "/update"}, {"post": "/logout"}, *_login(VIEWER), {"get": "/update"}]),
+    "update/current": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/update_check.json": json.dumps({"current_version": frfw.__version__, "update_available": False,
+                                                   "checked_at": "2026-10-31T12:00:00+00:00", "error": None})}},
+        [*_login(), {"get": "/update"}],
+        [{"cmd": LATEST_URL, "socket": HTTPS, "reply": {"tag_name": f"v{frfw.__version__}", "name": "FR_OS",
+                                                       "body": "Fixes.", "html_url": "https://example.invalid/r"}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "reply": {"ok": True, "kernel": {
+             "summary": "Running the image's own kernel.", "state": "image", "available": True, "ready": None}}}]),
+    "update/available": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/update_check.json": json.dumps({
+            "current_version": frfw.__version__, "update_available": True, "latest_version": "9.9.9",
+            "security": True, "checked_at": "2026-10-31T12:00:00+00:00", "error": "GitHub returned 502",
+            "auto_install_error": "signature did not verify"}),
+        "etc/fr_os/update_state.json": json.dumps({
+            "current_version": "0.0.9", "previous_version": "0.2.0",
+            "last_update": {"action": "update", "version": "0.2.1", "applied_at": "2026-10-20T08:00:00+00:00",
+                            "status": "ok", "message": "Updated <b>fine</b>"}})}},
+        [*_login(), {"get": "/update"}],
+        [{"cmd": LATEST_URL, "socket": HTTPS, "reply": {
+            "tag_name": "v9.9.9", "name": "FR_OS 9.9.9 [Security]", "body": "Fixes <script>CVE</script>\n\nSecurity: no",
+            "published_at": "2026-10-30T00:00:00Z"}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "reply": {"ok": True, "kernel": {
+             "summary": "Kernel 6.1.0-54 is on trial.", "state": "trial", "available": True, "ready": "6.1.0-55-amd64",
+             "last_check": {"at": "2026-10-31T03:00:00+00:00", "error": True, "message": "apt failed"}}}}]),
+    "update/answers": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/update_state.json": json.dumps({"previous_version": None, "last_update": {"action": "rollback"}})}},
+        [*_login(), *[{"get": "/update"}] * 7],
+        [{"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "status": 404},
+         {"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "status": 403},
+         {"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "reply": ["not", "a", "release"]},
+         {"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "reply": {"tag_name": "nightly-7", "body": None}},
+         {"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "reply": {"tag_name": "", "name": None}},
+         {"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "reply": {"tag_name": "v0.1.9", "body": "x"}},
+         {"cmd": LATEST_URL, "socket": HTTPS, "times": 1, "reply": {"tag_name": "1.0.0", "body": "security: YES"}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": False, "message": "no state"}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": False}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "kernel": None}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "kernel": {
+             "summary": "Kept.", "state": "good", "available": False, "ready": "6.1.0-55-amd64"}}},
+         {"cmd": "kernel_status", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "kernel": {
+             "summary": "No apt.", "available": False}}}]),
+    "update/repo": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG + "update:\n  repo: someone/fr-fork\n  kernel_updates: false\n",
+        "etc/fr_os/update_state.json": "[1, 2]"}},
+        [*_login(), {"get": "/update"}],
+        [{"cmd": "https://api.github.com/repos/someone/fr-fork/releases/latest", "socket": HTTPS,
+          "reason": "timed out"}]),
+    "update/settings": ({"accounts": [ADMIN, VIEWER]}, [
+        *_login(), {"post": "/update/auto-security", "form": {"enabled": "true"}}, {"get": "/update?success=ok"},
+        {"post": "/update/auto-security", "form": {}},
+        {"post": "/update/kernel-updates", "form": {"enabled": "true"}},
+        {"post": "/update/kernel-updates", "form": {"enabled": "off"}}, {"get": "/update?error=%3Cb%3E"},
+        {"post": "/update/kernel-updates", "form": {"enabled": "maybe"}},
+        {"post": "/update/auto-security", "form": {"enabled": "1"}, "csrf": "wrong"},
+        {"post": "/logout"}, *_login(VIEWER), {"post": "/update/auto-security", "form": {"enabled": "true"}}]),
+    "update/save-refused": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": CONFIG + "update:\n  repo: not a repo\n"}},
+        [*_login(), {"get": "/update"}, {"post": "/update/auto-security", "form": {"enabled": "true"}},
+         {"post": "/update/kernel-updates", "form": {}}]),
 }
 
 
