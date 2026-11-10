@@ -210,3 +210,18 @@ func (h helper) RefreshAdblock() (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "refresh_adblock"), 60)
 }
 func (h helper) XDPStats() (*config.Map, error) { return h.apply(cmdMap("cmd", "xdp_stats"), 10) }
+func (h helper) AuthorizeZTNA(ip, username string) (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "authorize_ztna", "ip", ip, "username", username), 10)
+}
+func (h helper) ZTNAStatus(ip string) (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "ztna_status", "ip", ip), 10)
+}
+func (h helper) WireGuardStatus() (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "wireguard_status"), 10)
+}
+
+// SetManagementAddresses moves the webUI and SSH, held until confirmed
+// (1.x: 120 s).
+func (h helper) SetManagementAddresses(addresses []string, user string) (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "set_management_addresses", "addresses", addresses, "user", user), 120)
+}

@@ -1,0 +1,209 @@
+{{define "title"}}System / PQC - FR_OS{{end}}
+{{define "content"}}
+<h1>System: Post-Quantum Hybrid Key Exchange</h1>
+<p class="muted">
+  Hardens the management layer (this webUI's HTTPS listener, and this
+  host's sshd if installed) with a hybrid classical+PQC key exchange
+  (X25519MLKEM768 for TLS, mlkem768x25519-sha256 for SSH), falling back
+  to classical-only automatically on any client or host build that
+  doesn't support it yet.
+</p>
+
+<div class="card status-card">
+  <span class="badge {{if .Data.Status.QuantumSafe}}badge-green{{else if .Data.Status.EnabledInConfig}}badge-yellow{{else}}badge-red{{end}}">
+    {{if .Data.Status.QuantumSafe}}Quantum-safe (active){{else if .Data.Status.EnabledInConfig}}Enabled, not yet active{{else}}Classical only{{end}}
+  </span>
+  <dl>
+    <div><dt>PQC enabled in config</dt><dd>{{if .Data.Status.EnabledInConfig}}Yes{{else}}No{{end}}</dd></div>
+    <div><dt>Host OpenSSL</dt><dd>{{.Data.Status.OpenSSLVersion}}</dd></div>
+    <div><dt>SSH installed</dt><dd>{{if .Data.Status.SSHInstalled}}Yes{{else}}No{{end}}</dd></div>
+  </dl>
+</div>
+
+<div class="card">
+  <h3>TLS (webUI HTTPS)</h3>
+  <table>
+    <tr><th>Check</th><th>Result</th></tr>
+    <tr>
+      <td>Host OpenSSL supports X25519MLKEM768 (requires OpenSSL &ge; 3.5)</td>
+      <td>{{if .Data.Status.HostSupportsHybrid}}<span class="badge badge-green">Yes</span>{{else}}<span class="badge badge-red">No</span>{{end}}</td>
+    </tr>
+    <tr>
+      <td>Last applied TLS group preference</td>
+      <td>{{or .Data.Status.ConfiguredGroups "(never applied)"}}</td>
+    </tr>
+    <tr>
+      <td>Hybrid group currently applied</td>
+      <td>{{if .Data.Status.AppliedHybrid}}<span class="badge badge-green">Yes</span>{{else}}<span class="badge badge-red">No</span>{{end}}</td>
+    </tr>
+  </table>
+  <p class="muted">
+    TLS 1.3 is always enforced when PQC is enabled below. The group
+    preference itself only takes effect on the <em>next</em> apply and a
+    subsequent <code>systemctl restart fr-webui</code> -- OpenSSL reads
+    its configuration once, at process start.
+  </p>
+</div>
+
+<div class="card">
+  <h3>SSH</h3>
+  {{if not .Data.Status.SSHInstalled}}
+  <p class="muted">sshd is not installed on this host -- nothing to configure.</p>
+  {{else}}
+  <table>
+    <tr><th>Check</th><th>Result</th></tr>
+    <tr>
+      <td>Installed sshd supports mlkem768x25519-sha256 (requires OpenSSH &ge; 9.9)</td>
+      <td>{{if .Data.Status.SSHSupportsHybrid}}<span class="badge badge-green">Yes</span>{{else}}<span class="badge badge-red">No</span>{{end}}</td>
+    </tr>
+    <tr>
+      <td>Hybrid KexAlgorithms drop-in active</td>
+      <td>{{if .Data.Status.SSHDropinActive}}<span class="badge badge-green">Yes</span>{{else}}<span class="badge badge-red">No</span>{{end}}</td>
+    </tr>
+  </table>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Settings</h3>
+  <form method="post" action="/system/pqc/settings">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="enabled" value="true" {{if .Data.Status.EnabledInConfig}}checked{{end}}> Enable PQC hybrid key exchange</label>
+    <button type="submit">Save</button>
+  </form>
+  <p class="muted">
+    Never breaks an older client or an older sshd/browser build -- if
+    the host's OpenSSL or OpenSSH is too old to know the hybrid
+    algorithm name, this silently keeps the classical-only fallback
+    list (still TLS 1.3-only on the webUI side) instead of failing.
+  </p>
+</div>
+<div class="card">
+  <h3>Management access</h3>
+  {{if .Data.Management.AllowWan}}
+  <div class="flash-error">{{.Data.Management.Warning}}</div>
+  {{end}}
+  <p>The webUI and SSH listen on <code>{{join .Data.Management.Addresses ", "}}</code> and are reachable from
+    {{if .Data.Management.Zones}}the <strong>{{join .Data.Management.Zones ", "}}</strong> zone(s){{else}}no zone (console only){{end}}.
+    {{if .Data.Management.Blocked}}The firewall drops them from <strong>{{join .Data.Management.Blocked ", "}}</strong>, whatever the rules say.{{end}}</p>
+  <p>
+    {{if and .Data.Management.VPNOn .Data.Management.VPNListening}}Away from home, manage the router through the <a href="/vpn">VPN</a>: it is on, and the
+    webUI and SSH listen on its tunnel address too.{{if .Data.Management.AllowWan}} There is no need to open them to the
+    internet as well -- turn that off below.{{end}}
+    {{else if .Data.Management.VPNOn}}Away from home, manage the router through the <a href="/vpn">VPN</a>: it is on -- tick its
+    tunnel address under "webUI address" below to have the webUI and SSH listen there too.{{if .Data.Management.AllowWan}} There is no need to open them to the
+    internet as well -- turn that off below.{{end}}
+    {{else}}To manage the router from outside, turn on the <a href="/vpn">VPN</a> (WireGuard) rather than opening the
+    webUI and SSH to the internet.{{end}}
+  </p>
+  <form method="post" action="/system/management"
+        data-confirm="Make the webUI and SSH reachable from the internet? The VPN (WireGuard, VPN screen) is the safer way to manage the router remotely." data-confirm-when-checked="allow_wan">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="allow_wan" value="true" {{if .Data.Management.AllowWan}}checked{{end}}> Allow management from the internet (WAN) -- not recommended</label>
+    <button type="submit">Save</button>
+  </form>
+  <p class="muted">Which zones count as management: <code>management.zones</code> in the config (default: every zone that isn't internet-facing).</p>
+</div>
+<div class="card" id="webui-address">
+  <h3>webUI address</h3>
+  <p>Where the webUI and SSH listen (besides the router itself). Only this setting moves them: a change elsewhere that
+    would take one of these addresses away is refused (ROADMAP SEC-27). Saving applies it at once, held until you
+    confirm it from the new address{{if .Data.Management.ConfirmSeconds}} within {{.Data.Management.ConfirmSeconds}} s{{end}};
+    otherwise the router goes back.</p>
+  {{if .Data.Management.Choices}}
+  <form method="post" action="/system/management-addresses"
+        data-confirm="Move the webUI and SSH to the ticked addresses now? Confirm from the new address, or the router goes back.">
+    {{.CSRFInput}}
+    {{range .Data.Management.Choices}}
+    <label class="checkbox-row"><input type="checkbox" name="addresses" value="{{.Address}}" {{if .Checked}}checked{{end}}> <code>{{.Address}}</code> -- {{.What}}</label>
+    {{end}}
+    <button type="submit">Move the webUI</button>
+  </form>
+  {{else}}
+  <p class="muted">No management interface has a static address: the webUI is reachable from the router itself only.</p>
+  {{end}}
+  <h4>Over IPv6</h4>
+  <p>The webUI and SSH can also listen on the router's stable IPv6 address (ULA) in each management zone that has IPv6 --
+    never on the provider's addresses, which change and are public. The same rules apply as over IPv4.
+    {{if and .Data.Management.IPv6 .Data.Management.IPv6Addresses}}They listen on <code id="management-ipv6-addresses">{{join .Data.Management.IPv6Addresses ", "}}</code>.{{end}}</p>
+  {{if .Data.Management.IPv6Available}}
+  <form method="post" action="/system/management-ipv6">
+    {{.CSRFInput}}
+    <label class="checkbox-row"><input type="checkbox" name="ipv6" value="true" {{if .Data.Management.IPv6}}checked{{end}}> Also over IPv6 (stable address)</label>
+    <button type="submit">Save</button>
+  </form>
+  {{else}}
+  <p class="muted">IPv6 is off (Interfaces screen).</p>
+  {{end}}
+</div>
+<div class="card">
+  <h3>Software integrity</h3>
+  <p class="muted">FR_OS's files -- the program, its compiled files, its systemd units and scripts, the XDP
+    program -- are compared with the signed release they came from (security-lessons G9, ROADMAP SEC-15),
+    so rewriting pip's install record doesn't hide a change. It covers FR_OS's own files only: a change
+    elsewhere -- another systemd unit, another program, an SSH key -- is not reported. Someone with root can
+    still change this check itself: the check that doesn't trust the router reads its boot medium from
+    another computer (scripts/verify-medium.py).</p>
+  {{if not .Data.Integrity.Verifiable}}<p><span class="badge">not verifiable</span> {{.Data.Integrity.Note}}</p>
+  {{else if .Data.Integrity.OK}}<p id="integrity-summary"><span class="badge badge-green">ok</span> {{.Data.Integrity.Summary}}</p>
+  {{if .Data.Integrity.Note}}<p class="muted">{{.Data.Integrity.Note}}</p>{{end}}
+  {{else}}<p id="integrity-summary"><span class="badge badge-red">changed</span> {{.Data.Integrity.Summary}}</p>
+  <ul>{{range .Data.Integrity.Changes}}<li><code>{{.}}</code></li>{{end}}</ul>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3>Storage &amp; persistence</h3>
+  {{if not .Data.Persistence.Live}}
+  <p><span class="badge badge-green">installed</span> This router runs from its own disk; every change is kept.</p>
+  {{else if .Data.Persistence.Active}}
+  <p><span class="badge badge-green">persistent</span> Live system with persistence on <code>{{join .Data.Persistence.Devices ", "}}</code>: settings, passwords and leases survive reboots.</p>
+  {{else}}
+  <div class="flash-error">Live system without persistence: every change made since boot -- config, passwords, enabled services -- is lost at the next reboot.</div>
+  <p class="muted">
+    {{if not .Data.Persistence.Requested}}This boot did not use the <code>persistence</code> option.{{end}}
+    FR_OS creates a persistence partition by itself on the first boot when the USB stick it was written to has at least 256 MiB free after the image.
+    To use an internal disk instead (a read-only medium, a VM's virtual CD): <code>sudo firewall-cli persistence create /dev/sdX --yes</code>, then reboot.
+  </p>
+  {{end}}
+  {{if .Data.Persistence.Live}}<p class="muted">Boot medium: <code>{{or .Data.Persistence.BootDevice "-"}}</code></p>{{end}}
+</div>
+<div class="card">
+  <h3>Multi-site monitoring</h3>
+  {{if .Data.NewToken}}
+  <div class="flash-success">
+    <strong>New metrics token -- copy it now, it is not stored and won't be shown again:</strong><br>
+    <code style="user-select:all;">{{.Data.NewToken}}</code>
+  </div>
+  {{end}}
+  <p class="muted">
+    A Prometheus server can scrape this router's <code>/metrics</code> over HTTPS. It is off until a
+    token is generated here; then it answers only requests carrying <code>Authorization: Bearer &lt;token&gt;</code>
+    (only its SHA-256 is kept in config.yaml). Examples: <code>telemetry/prometheus-multisite.yml</code>
+    and the fleet dashboard in <code>telemetry/</code>.
+  </p>
+  <form method="post" action="/system/metrics/site">
+    {{.CSRFInput}}
+    <label>Site name (shown in fleet dashboards; empty = hostname "{{.Data.MetricsHostname}}")</label>
+    <input type="text" name="site" value="{{.Data.MetricsSite}}" placeholder="budapest-office" pattern="[a-z0-9][a-z0-9_.\-]{0,62}">
+    <button type="submit">Save site name</button>
+  </form>
+  <p>Token: {{if .Data.MetricsTokenSet}}<span class="badge badge-green">required</span>{{else}}<span class="badge badge-yellow" id="metrics-off">none -- /metrics is off</span>{{end}}</p>
+  <form class="inline" method="post" action="/system/metrics/token">
+    {{.CSRFInput}}
+    <input type="hidden" name="action" value="generate">
+    <button type="submit">{{if .Data.MetricsTokenSet}}Replace token{{else}}Generate token{{end}}</button>
+  </form>
+  {{if .Data.MetricsTokenSet}}
+  <form class="inline" method="post" action="/system/metrics/token">
+    {{.CSRFInput}}
+    <input type="hidden" name="action" value="disable">
+    <button type="submit" class="secondary">Remove token</button>
+  </form>
+  {{end}}
+  <p class="muted">
+    Certificate for the scraper's <code>ca_file</code>: <a href="/system/cert.pem">download</a>
+    {{if .Data.CertSHA256}}<br>SHA-256: <code style="word-break:break-all;">{{.Data.CertSHA256}}</code>{{end}}
+  </p>
+</div>
+{{end}}

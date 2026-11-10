@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/starsmash29/fr_os-community/config"
@@ -245,24 +244,8 @@ func (s *Server) linkStates() (map[string]*bool, error) {
 // file system mounted, whose changes a reboot loses
 // (frfw.persistence.status: live and not active).
 func (s *Server) liveWithoutPersistence() (bool, error) {
-	cmdline, _, err := readOptional(s.env.Paths.at("/proc/cmdline"))
-	if err != nil {
-		return false, err
-	}
-	if !slices.Contains(config.PySplit(cmdline), "boot=live") {
-		return false, nil
-	}
-	mounts, _, err := readOptional(s.env.Paths.at("/proc/mounts"))
-	if err != nil {
-		return false, err
-	}
-	for _, line := range config.PySplitlines(mounts) {
-		parts := config.PySplit(line)
-		if len(parts) >= 2 && strings.HasPrefix(strings.ReplaceAll(parts[1], `\040`, " "), "/run/live/persistence/") {
-			return false, nil
-		}
-	}
-	return true, nil
+	p, err := s.persistenceStatus()
+	return p.Live && !p.Active, err
 }
 
 // countBlockedDomains is frfw.adblock.count_blocked_domains: the
