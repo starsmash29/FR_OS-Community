@@ -114,8 +114,8 @@ func run(args []string) int {
 	server := &http.Server{
 		Handler:   handler,
 		TLSConfig: tlsConfig,
-		// Slow clients don't hold a connection for ever (uvicorn's
-		// keep-alive timeout is 5 s).
+		// Slow clients don't hold a connection for ever (the 1.x
+		// server's keep-alive timeout was 5 s).
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       5 * time.Second,
 	}
