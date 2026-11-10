@@ -214,7 +214,14 @@ func (h helper) IoTSyncIsolation(macs []string) (*config.Map, error) {
 func (h helper) RefreshAdblock() (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "refresh_adblock"), 60)
 }
-func (h helper) XDPStats() (*config.Map, error) { return h.apply(cmdMap("cmd", "xdp_stats"), 10) }
+func (h helper) BruteforceStatus() (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "bruteforce_status"), 10)
+}
+func (h helper) ZTNASessionsStatus() (*config.Map, error) {
+	return h.apply(cmdMap("cmd", "ztna_sessions_status"), 10)
+}
+func (h helper) HWRamInfo() (*config.Map, error) { return h.apply(cmdMap("cmd", "hw_ram_info"), 10) }
+func (h helper) XDPStats() (*config.Map, error)  { return h.apply(cmdMap("cmd", "xdp_stats"), 10) }
 func (h helper) AuthorizeZTNA(ip, username string) (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "authorize_ztna", "ip", ip, "username", username), 10)
 }

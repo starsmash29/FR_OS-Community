@@ -42,6 +42,10 @@ type Env struct {
 	// Disk is the used and total bytes of the file system at path
 	// (statvfs), ok false when it can't be read.
 	Disk func(path string) (used, total int64, ok bool)
+	// Follow starts a program that runs until stopped (the live log's
+	// tail -F): its stdout and stderr, and stop, which ends it and
+	// waits for it.
+	Follow func(argv []string) (stdout, stderr io.Reader, stop func(), err error)
 }
 
 // Paths are 1.x's frfw.paths the webUI uses, all under Root.
@@ -87,6 +91,7 @@ func DefaultEnv() Env {
 		CPUs:   runtime.NumCPU,
 		Disk:   diskUsage,
 		Fetch:  fetchRelease,
+		Follow: followProgram,
 	}
 }
 

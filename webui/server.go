@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"embed"
 	"encoding/hex"
@@ -56,6 +57,8 @@ type Server struct {
 	guard             *bruteforceGuard
 	tickets           *ticketStore
 	enrolments        *ticketStore
+	metrics           metricsCache
+	logs              logRegistry
 	// totpMu makes checking a TOTP code and recording its time step one
 	// step, so two requests racing with the same code can't both pass.
 	totpMu sync.Mutex
@@ -111,6 +114,10 @@ type answer struct {
 	status  int
 	headers [][2]string
 	body    []byte
+	// stream, when set, writes the body as it comes (server-sent
+	// events): write sends and flushes one piece and says whether the
+	// client still takes them; ctx ends with the request.
+	stream func(ctx context.Context, write func(string) bool)
 }
 
 func (a *answer) header(k, v string) { a.headers = append(a.headers, [2]string{k, v}) }
@@ -292,7 +299,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		entry.Set("status", bigInt(a.status))
 		s.auditAppend(entry)
 	}
+	if a.stream != nil {
+		writeStream(w, r, a)
+		return
+	}
 	writeAnswer(w, a)
+}
+
+// writeStream is a StreamingResponse: no Content-Length, each piece
+// flushed as it is written.
+func writeStream(w http.ResponseWriter, r *http.Request, a *answer) {
+	for _, h := range a.headers {
+		w.Header().Add(h[0], h[1])
+	}
+	w.WriteHeader(a.status)
+	rc := http.NewResponseController(w)
+	rc.Flush()
+	a.stream(r.Context(), func(piece string) bool {
+		if _, err := io.WriteString(w, piece); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
+	})
 }
 
 func parseQuery(raw string) (form, error) {

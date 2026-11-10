@@ -78,7 +78,7 @@ var routes = []route{
 	{"GET", "/xdp", "login", (*Server).showXDP},
 	{"POST", "/xdp/settings", "login", (*Server).saveXDP},
 	{"POST", "/xdp/blocklist/remove", "login", (*Server).removeXDPDomain},
-	{"GET", "/xdp/logs/stream", "login", nil},
+	{"GET", "/xdp/logs/stream", "login", (*Server).streamXDPLog},
 	{"GET", "/ztna/login", "", (*Server).ztnaLoginForm},
 	{"POST", "/ztna/login", "", (*Server).ztnaLoginSubmit},
 	{"GET", "/ztna/status", "", (*Server).ztnaStatus},
@@ -119,7 +119,7 @@ var routes = []route{
 	{"POST", "/tls/settings", "login", (*Server).saveTLSSettings},
 	{"POST", "/tls/block", "login", (*Server).blockTLS},
 	{"POST", "/tls/unblock", "login", (*Server).unblockTLS},
-	{"GET", "/metrics", "", nil},
+	{"GET", "/metrics", "", (*Server).showMetrics},
 }
 
 func entry(pairs ...any) *config.Map { return cmdMap(pairs...) }

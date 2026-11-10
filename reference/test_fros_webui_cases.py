@@ -34,6 +34,7 @@ anything about 1.x.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import datetime as _dt
 import hashlib
@@ -292,6 +293,30 @@ def webui(monkeypatch, tmp_path):
     # (decisions.md, 3c-1), through the case's table.
     monkeypatch.setattr(update_mod, "DEFAULT_REPO", COMMUNITY_REPO)
     monkeypatch.setattr(update_mod, "_fetch_json", lambda url, timeout: state["fake"].fetch(url, timeout))
+    # /metrics: its 100 ms CPU sample doesn't wait, its clocks are the
+    # case's, and its cache starts empty in every case.
+    from frfw import metrics as metrics_mod
+    from frfw.webui.routes import metrics as metrics_routes
+    from frfw.webui.routes import xdp as xdp_routes
+
+    monkeypatch.setattr(metrics_mod, "time", SimpleNamespace(sleep=lambda s: None, time=lambda: state["fake"].now))
+    monkeypatch.setattr(metrics_routes, "time", SimpleNamespace(monotonic=lambda: state["fake"].now))
+    monkeypatch.setattr(metrics_routes, "_cache", {})
+    # The XDP live log's `tail -F` answers from the programs table: its
+    # stdout is what the event file holds, then the child ends, which
+    # ends the stream.
+    monkeypatch.setattr(xdp_routes, "_log_streams", {})
+
+    async def follow(*args, stdout=None, stderr=None, stdin=None):
+        proc = state["system"].run(list(args), text=True)
+        out, err = asyncio.StreamReader(), asyncio.StreamReader()
+        out.feed_data(proc.stdout.encode())
+        out.feed_eof()
+        err.feed_data(proc.stderr.encode())
+        err.feed_eof()
+        return SimpleNamespace(stdout=out, stderr=err, returncode=proc.returncode)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", follow)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: state["system"].run(*a, **k))
     # The rules screen and the schedules read the wall clock through
     # datetime.now, which doesn't go through time.time.
@@ -317,6 +342,9 @@ def webui(monkeypatch, tmp_path):
         monkeypatch.setattr(persistence, "LIVE_MEDIUM_MOUNT", "/run/live/medium")
         monkeypatch.setattr(persistence, "LIVE_PERSISTENCE_PREFIX", "/run/live/persistence/")
         state["system"] = system._Fake(root, programs, b"")
+        from frfw import paths
+        from frfw.webui.routes import xdp as xdp_routes
+        monkeypatch.setattr(xdp_routes, "_EVENTS_CMD", ["tail", "-n", "50", "-F", "--", str(paths.SNI_EVENTS_PATH)])
         state["fake"].system = state["system"]
         system._hook_fake[:] = [state["system"]]
         return state["fake"], root
@@ -727,6 +755,20 @@ LISTENERS = [
     {"proto": "tcp", "address": "203.0.113.5", "port": 9000, "device": None, "process": "nc"},
     {"proto": "udp", "address": "0.0.0.0", "port": 53530, "device": None, "process": None},
     {"proto": "tcp", "address": "192.168.20.1", "port": 1883, "device": None, "process": "mosquitto"},
+]
+
+#: The bearer token a Prometheus scrapes /metrics with, and the config
+#: section that turns /metrics on with it.
+METRICS_TOKEN = "scrape-token-1"
+METRICS_SECTION = f"metrics:\n  token_sha256: {hashlib.sha256(METRICS_TOKEN.encode()).hexdigest()}\n"
+
+#: The XDP live log's `tail -F` of the SNI event file, and what it reads.
+SNI_TAIL = ["tail", "-n", "50", "-F", "--", "@ROOT@/var/log/fr_os-sni/events.jsonl"]
+SNI_LINES = [
+    json.dumps({"ts": NOW - 5, "ifindex": 3, "sni": "ads.example.com", "action": "drop"}),
+    '{"ts": 1793491199.5, "sni": "tracker.example.net", "src": "192.168.1.20"}',
+    "not json at all", "", "   ", "[1, 2]", '{"a": 1}\r', "NaN", '{"cut": "half',
+    json.dumps({"sni": "\u00e9t\u00e9.example", "note": "<b>&</b>"}, ensure_ascii=False),
 ]
 
 #: The interfaces' addresses the attack surface sees with LISTENERS.
@@ -1800,6 +1842,88 @@ SESSIONS = {
         {"post": "/update/kernel-updates", "form": {"enabled": "maybe"}},
         {"post": "/update/auto-security", "form": {"enabled": "1"}, "csrf": "wrong"},
         {"post": "/logout"}, *_login(VIEWER), {"post": "/update/auto-security", "form": {"enabled": "true"}}]),
+    # -- /metrics (Prometheus) ---------------------------------------------------------
+    "metrics/off": ({"accounts": [ADMIN]}, [
+        {"get": "/metrics"}, {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}]),
+    "metrics/denied": ({"files": {"etc/fr_os/config.yaml": CONFIG + METRICS_SECTION}}, [
+        {"get": "/metrics"}, {"get": "/metrics", "headers": {"Authorization": "Basic YWRtaW46eA=="}},
+        {"get": "/metrics", "headers": {"Authorization": "Bearer wrong"}},
+        {"get": "/metrics", "headers": {"Authorization": "Bearer"}},
+        {"get": "/metrics", "headers": {"Authorization": "Bearer "}},
+        {"get": "/metrics", "headers": {"Authorization": f"Token {METRICS_TOKEN}"}}]),
+    "metrics/bad-digest": ({"files": {"etc/fr_os/config.yaml": CONFIG + "metrics:\n  token_sha256: abc\n"}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}]),
+    "metrics/not-a-section": ({"files": {"etc/fr_os/config.yaml": CONFIG + "metrics: [1]\n"}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}]),
+    "metrics/full": ({"accounts": [ADMIN], "files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG + METRICS_SECTION + "  site: branch-7\n",
+        "etc/fr_os/xdp_state.json": XDP_STATE,
+        "etc/fr_os/adblock.hosts": "# FR_OS\n" + "".join(f"0.0.0.0 ad{i}.example\n" for i in range(12)),
+        "etc/fr_os/adblock.d/malware.hosts": "0.0.0.0 bad.example\n0.0.0.0 worse.example\n",
+        SENSORS + "appid_usage.json": APP_USAGE, SENSORS + "iot_inventory.json": INVENTORY,
+        SENSORS + "tls_fingerprints.json": TLS_STATE,
+        "sys/class/net/eth0/statistics/rx_bytes": "123456789\n", "sys/class/net/eth0/statistics/tx_bytes": "987\n",
+        "sys/class/net/eth1/statistics/rx_bytes": "42\n", "sys/class/net/eth1/statistics/tx_bytes": "nope\n",
+        "proc/stat": "cpu  100 0 50 800 50 0 0 0 0 0\ncpu0 100 0 50 800 50 0 0 0 0 0\n",
+        "proc/cpuinfo": "processor\t: 0\nmodel name\t: Intel(R) Celeron(R) N5105 @ 2.00GHz\ncpu MHz\t\t: 1995.379\n",
+        "proc/mounts": "/dev/sda1 / ext4 rw 0 0\nproc /proc proc rw 0 0\n/dev/sda2 /boot ext4 rw 0 0\n"
+                       "/dev/sda1 / ext4 rw 0 0\ntmpfs /run tmpfs rw 0 0\n/dev/sdb1 /mnt/x\"y vfat rw 0 0\n"},
+        "programs": [_ip_link("eth1", 1), _ip_link("eth2", 2)]}, [
+        *[{"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}] * 2, {"advance": 16},
+        {"get": "/metrics", "headers": {"Authorization": f"bearer   {METRICS_TOKEN} "}}],
+        [{"cmd": "xdp_stats", "reply": {"ok": True, "stats": {"drop_match": 17, "pass": 9}}},
+         {"cmd": "bruteforce_status", "reply": {"ok": True, "banned": [], "count": 3}},
+         {"cmd": "ztna_sessions_status", "reply": {"ok": True, "sessions": [], "count": 1}},
+         {"cmd": "ids_quarantine_status", "reply": {"ok": True, "quarantined": [], "count": 2, "macs": []}},
+         {"cmd": "iot_isolation_status", "reply": {"ok": True, "isolated": [], "count": 1}},
+         {"cmd": "hw_ram_info", "reply": {"ok": True, "modules": [
+             {"part_number": "M471A1K43DB1-CWE", "speed_mhz": 3200}, {"speed_mhz": None},
+             {"part_number": "a\\b\"c\nd"}]}}]),
+    "metrics/quiet": ({"files": {
+        "etc/fr_os/config.yaml": CONFIG + METRICS_SECTION,
+        "sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq": "2400050\n",
+        "proc/stat": "cpu  1 2 3\n", "proc/meminfo": "MemTotal: 100 kB\nMemFree: x kB\n"}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}],
+        [{"cmd": "xdp_stats", "reply": {"ok": False}}, {"cmd": "hw_ram_info", "reply": {"ok": False}}]),
+    "metrics/odd": ({"files": {
+        "etc/fr_os/config.yaml": FILTER_CONFIG + METRICS_SECTION,
+        SENSORS + "appid_usage.json": json.dumps({"apps": {"zz-unknown": {"hits_24h": "7", "active_clients": True},
+                                                           "youtube": {}}}),
+        SENSORS + "iot_inventory.json": json.dumps({"devices": [{"category": "iot"}, {"category": 5}, "x",
+                                                                {"category": "general"}]}),
+        SENSORS + "tls_fingerprints.json": json.dumps({"clients": {"a": ["x", "y"], "b": {"y": 1, "z": 2}},
+                                                       "events": [{"type": "blocklist", "ts": str(NOW - 5)},
+                                                                  {"type": "new_fingerprint", "ts": NOW - 90000},
+                                                                  {"type": "new_fingerprint"}]}),
+        "proc/meminfo": "MemTotal:   1000 kB\nMemAvailable:  250 kB\n"}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}],
+        [{"cmd": "xdp_stats", "reply": {"ok": True, "stats": {"drop_match": " 12 "}}},
+         {"cmd": "bruteforce_status", "reply": {"ok": True, "count": True}},
+         {"cmd": "ztna_sessions_status", "reply": {"ok": True, "count": 2.5}},
+         {"cmd": "ids_quarantine_status", "reply": {"ok": True}},
+         {"cmd": "iot_isolation_status", "reply": {"ok": True, "count": 12345678901234567890}}]),
+    # A value that isn't a number fails the whole answer in 1.x.
+    "metrics/unrenderable": ({"files": {"etc/fr_os/config.yaml": CONFIG + METRICS_SECTION}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}],
+        [{"cmd": "xdp_stats", "reply": {"ok": True, "stats": {"drop_match": {"a": 1}}}}]),
+    "metrics/invalid-config": ({"files": {
+        "etc/fr_os/config.yaml": "version: 1\nzones: []\n" + METRICS_SECTION}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}]),
+    "metrics/helper-gone": ({"files": {"etc/fr_os/config.yaml": FILTER_CONFIG + METRICS_SECTION}}, [
+        {"get": "/metrics", "headers": {"Authorization": f"Bearer {METRICS_TOKEN}"}}],
+        [{"cmd": c, "error": True} for c in ("xdp_stats", "bruteforce_status", "ztna_sessions_status",
+                                            "ids_quarantine_status", "iot_isolation_status", "hw_ram_info")]),
+    # -- the XDP live log (server-sent events) -------------------------------------------
+    "xdp/log-stream": ({"accounts": [ADMIN, VIEWER], "programs": [
+        {"argv": SNI_TAIL, "stdout": "".join(line + "\n" for line in SNI_LINES)}]}, [
+        *_login(), {"get": "/xdp/logs/stream"}, {"get": "/xdp/logs/stream"}, {"post": "/logout"},
+        *_login(VIEWER), {"get": "/xdp/logs/stream"}, {"post": "/logout"}, {"get": "/xdp/logs/stream"}]),
+    "xdp/log-stream-long-line": ({"accounts": [ADMIN], "programs": [
+        {"argv": SNI_TAIL, "stdout": SNI_LINES[0] + "\n" + json.dumps("x" * 70000) + "\n" + SNI_LINES[1] + "\n"}]},
+        [*_login(), {"get": "/xdp/logs/stream"}]),
+    "xdp/log-stream-no-tail": ({"accounts": [ADMIN], "programs": [{"argv": SNI_TAIL, "error": "missing"}]},
+                               [*_login(), {"get": "/xdp/logs/stream"}]),
+    "xdp/log-stream-empty": ({"accounts": [ADMIN]}, [*_login(), {"get": "/xdp/logs/stream"}]),
     "update/save-refused": ({"accounts": [ADMIN], "files": {
         "etc/fr_os/config.yaml": CONFIG + "update:\n  repo: not a repo\n"}},
         [*_login(), {"get": "/update"}, {"post": "/update/auto-security", "form": {"enabled": "true"}},
