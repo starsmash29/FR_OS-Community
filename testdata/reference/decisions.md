@@ -312,3 +312,29 @@ Cases: none differ. Decided:
   /proc/mounts, not files under the case's root, so 1.x's
   `persistence.LIVE_MEDIUM_MOUNT` and `LIVE_PERSISTENCE_PREFIX` are no
   longer rerooted. No earlier case had a live system, so none changes.
+
+## 2026-11-10: the security checklist, the attack surface and the update screen (phase 3c-1)
+
+The security checklist, the attack-surface view and the update screen
+(with its two settings) are replayed in twenty-one sessions of
+webui.jsonl. The update check's request to GitHub answers from the
+case's table like the helpers do. Cases: none differ. Decided:
+
+- **FR_OS 2 looks for its releases in starsmash29/FR_OS-Community**
+  unless `update.repo` names another repository; 1.x's default is its
+  own repository, FR_OS-pblk. The harness sets 1.x's
+  `update.DEFAULT_REPO` to the same, so the page and the request match.
+  As in 1.x, the screen asks GitHub when an admin opens it, and nothing
+  else in the webUI goes to the internet.
+- **The update-helper's actions are not ported yet**: installing a
+  release, rolling back, and checking, trying or cancelling a kernel
+  answer 501 until the update-helper is ported in its own phase. The
+  page shows the same forms as 1.x; no recorded step posts them. The
+  kernel card asks the update-helper's `kernel_status`, and with no
+  update-helper says it did not answer, as 1.x does when it is down.
+- **GitHub's answer is bounded** at 1 MiB; a larger one is a failed
+  check. An answer that isn't JSON is reported with Go's parser
+  message, which differs from Python's; no case records one.
+- **The release's version digits are ASCII.** 1.x's `\d` also takes
+  other Unicode digits in a tag; FR_OS 2 reads such a tag as not
+  MAJOR.MINOR.PATCH, so a different tag still means a new release.
