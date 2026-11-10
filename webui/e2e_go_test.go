@@ -68,6 +68,13 @@ func TestGoWebUIGoHelperSandbox(t *testing.T) {
 		t.Skip("needs the Go toolchain to build the binaries")
 	}
 	root := t.TempDir()
+	// t.TempDir is 0700, and so is its parent: the webUI runs as
+	// fr_os-webui and must reach its binary.
+	for _, dir := range []string{filepath.Dir(root), root} {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	binDir := filepath.Join(root, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -84,6 +91,14 @@ func TestGoWebUIGoHelperSandbox(t *testing.T) {
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if data, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("building %s: %v\n%s", name, err, data)
+		}
+	}
+	// A mount point needs a directory, which the sandbox creates on the
+	// host's file system where there is none: the empty ones it made are
+	// removed again once the namespace is gone.
+	for _, target := range e2eMountPoints {
+		if _, err := os.Lstat(target); err != nil {
+			t.Cleanup(func() { os.Remove(target) })
 		}
 	}
 	self, err := os.Executable()
@@ -202,7 +217,9 @@ func testGoWebUIGoHelperSandboxed(t *testing.T) {
 
 	// A first apply of the untouched config, so later applies have a
 	// previous config to be held against (helper/applycmds.go: the first
-	// apply is never held, nothing could be reverted to).
+	// apply is never held, nothing could be reverted to). The password
+	// change gave a new session, so a new CSRF token.
+	csrf = e2eCSRF(t, client, base+"/rules")
 	e2ePost(t, client, base+"/apply", url.Values{"csrf_token": {csrf}}, 303, "/")
 	if status := e2eApplyStatus(t); status.pending != nil {
 		t.Fatalf("base apply must not be held, got pending %q", status.pending["id"])
@@ -278,6 +295,11 @@ nat: {masquerade: [{out_zone: wan}]}
 management: {zones: [lan], confirm_apply_seconds: 60}
 `
 
+// e2eMountPoints are the absolute paths the daemons use, each covered
+// by a directory of the test's own in the sandbox.
+var e2eMountPoints = []string{"/etc/fr_os", "/etc/kea", "/etc/ssh", "/var/log/fr_os",
+	"/var/lib/kea", "/run/fr_os", "/run/sshd", "/usr/local/share/fr_os"}
+
 // mustBindMounts redirects every absolute FR_OS path the daemons write
 // into the temp dir. Private first, so nothing leaks to the host.
 func mustBindMounts(t *testing.T, root string) {
@@ -285,8 +307,7 @@ func mustBindMounts(t *testing.T, root string) {
 	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
 		t.Fatalf("making mounts private: %v", err)
 	}
-	for _, target := range []string{"/etc/fr_os", "/etc/kea", "/etc/ssh", "/var/log/fr_os",
-		"/var/lib/kea", "/run/fr_os", "/run/sshd", "/usr/local/share/fr_os"} {
+	for _, target := range e2eMountPoints {
 		mirror := filepath.Join(root, "mnt"+target)
 		if err := os.MkdirAll(mirror, 0o755); err != nil {
 			t.Fatal(err)
@@ -314,9 +335,21 @@ func mustSandboxUser(t *testing.T) (int, int) {
 	if err != nil {
 		t.Fatalf("reading /etc/group: %v", err)
 	}
+	// A machine that already has the account (a router, or a dev box
+	// with 1.x installed) is used as it is.
+	for _, line := range strings.Split(string(passwd), "\n") {
+		if fields := strings.Split(line, ":"); len(fields) >= 4 && fields[0] == "fr_os-webui" {
+			uid, err1 := strconv.Atoi(fields[2])
+			gid, err2 := strconv.Atoi(fields[3])
+			if err1 != nil || err2 != nil {
+				t.Fatalf("malformed fr_os-webui entry: %q", line)
+			}
+			return uid, gid
+		}
+	}
 	id := strconv.Itoa(e2eWebUIUID)
 	for _, line := range append(strings.Split(string(passwd), "\n"), strings.Split(string(group), "\n")...) {
-		if strings.HasPrefix(line, "fr_os-webui:") || strings.Contains(line, ":"+id+":") {
+		if fields := strings.Split(line, ":"); len(fields) >= 3 && fields[2] == id {
 			t.Fatalf("uid/gid %s is taken in the sandbox", id)
 		}
 	}
@@ -359,10 +392,18 @@ func mustFreshProcSys(t *testing.T) {
 // names, with ip (always real).
 func mustSandboxNet(t *testing.T) {
 	t.Helper()
+	// A kernel without the dummy driver (some container hosts) gets
+	// bridges of the same names: the apply only needs links that exist.
+	kind := "dummy"
+	if exec.Command("ip", "link", "add", "dummy0", "type", "dummy").Run() != nil {
+		kind = "bridge"
+		if out, err := exec.Command("ip", "link", "add", "dummy0", "type", kind).CombinedOutput(); err != nil {
+			t.Fatalf("ip link add dummy0: %v %s", err, out)
+		}
+	}
 	for _, argv := range [][]string{
 		{"link", "set", "lo", "up"},
-		{"link", "add", "dummy0", "type", "dummy"},
-		{"link", "add", "dummy1", "type", "dummy"},
+		{"link", "add", "dummy1", "type", kind},
 		{"link", "set", "dummy0", "up"},
 		{"link", "set", "dummy1", "up"},
 	} {
@@ -647,6 +688,9 @@ func e2ePost(t *testing.T, client *http.Client, target string, form url.Values, 
 		t.Fatalf("POST %s: status %d, want %d: %.500s", target, resp.StatusCode, want, body)
 	}
 	loc := resp.Header.Get("Location")
+	if strings.Contains(loc, "error=") {
+		t.Fatalf("POST %s: refused, Location %q", target, loc)
+	}
 	if !strings.HasPrefix(loc, wantLoc) {
 		t.Fatalf("POST %s: Location %q, want prefix %q: %.500s", target, loc, wantLoc, body)
 	}
