@@ -72,6 +72,9 @@ func parse(data []byte) (*Catalog, error) {
 }
 
 // Known reports whether id is an app of the catalog.
+// App is the catalog entry with this id, or nil.
+func (c *Catalog) App(id string) *App { return c.byID[id] }
+
 func (c *Catalog) Known(id string) bool { _, ok := c.byID[id]; return ok }
 
 // BlockingNames is every catalog name of the given apps, sorted and

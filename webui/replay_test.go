@@ -7,6 +7,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"math/big"
@@ -14,10 +15,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -208,6 +211,7 @@ func replay(t *testing.T, c reference.WebUICase) {
 		Send:   helpers.send,
 		Fetch:  helpers.fetch,
 		Run:    programs.run,
+		Follow: programs.follow(root),
 		Kernel: func() string { return c.Uname[2] },
 		CPUs:   func() int { return c.CPUs },
 		Disk: func(string) (int64, int64, bool) {
@@ -301,10 +305,41 @@ func replay(t *testing.T, c reference.WebUICase) {
 type fakePrograms struct {
 	table  []reference.ApplyAnswer
 	passed map[int]int
+	mu     sync.Mutex
 	calls  [][]string
 }
 
 func (f *fakePrograms) run(argv []string, _ float64) (int, string, error) {
+	answer := f.lookup(argv)
+	switch answer.Error {
+	case "missing":
+		return -1, "", fmt.Errorf("%s: no such file or directory", argv[0])
+	case "timeout":
+		return -1, "", fmt.Errorf("%s: timed out", argv[0])
+	}
+	return answer.RC, answer.Stdout, nil
+}
+
+// follow is Env.Follow from the table: the child's output is the
+// entry's, then it ends (which ends a live log's stream).
+func (f *fakePrograms) follow(root string) func([]string) (io.Reader, io.Reader, func(), error) {
+	return func(argv []string) (io.Reader, io.Reader, func(), error) {
+		rooted := make([]string, len(argv))
+		for i, a := range argv {
+			rooted[i] = strings.ReplaceAll(a, root, "@ROOT@")
+		}
+		answer := f.lookup(rooted)
+		if answer.Error == "missing" {
+			return nil, nil, nil, fmt.Errorf("%s: %w", argv[0], exec.ErrNotFound)
+		}
+		return strings.NewReader(answer.Stdout), strings.NewReader(answer.Stderr), func() {}, nil
+	}
+}
+
+// lookup records a call and finds its answer.
+func (f *fakePrograms) lookup(argv []string) reference.ApplyAnswer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, argv)
 	answer := reference.ApplyAnswer{}
 	for i, a := range f.table {
@@ -318,13 +353,7 @@ func (f *fakePrograms) run(argv []string, _ float64) (int, string, error) {
 		answer = a
 		break
 	}
-	switch answer.Error {
-	case "missing":
-		return -1, "", fmt.Errorf("%s: no such file or directory", argv[0])
-	case "timeout":
-		return -1, "", fmt.Errorf("%s: timed out", argv[0])
-	}
-	return answer.RC, answer.Stdout, nil
+	return answer
 }
 
 // request1x is the request Starlette's TestClient sent.

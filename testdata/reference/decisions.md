@@ -338,3 +338,24 @@ case's table like the helpers do. Cases: none differ. Decided:
 - **The release's version digits are ASCII.** 1.x's `\d` also takes
   other Unicode digits in a tag; FR_OS 2 reads such a tag as not
   MAJOR.MINOR.PATCH, so a different tag still means a new release.
+
+## 2026-11-10: the Prometheus metrics and the XDP live log (phase 3c-2)
+
+`/metrics` and `/xdp/logs/stream` are replayed in fourteen sessions of
+webui.jsonl: ten scrapes (metrics off, refused tokens, a malformed
+digest, the cache, a quiet machine, odd values, a value that fails the
+answer, an invalid config, the helper gone) and four live logs (lines
+of every shape, a line too long, no `tail`, an empty log). The live
+log's `tail -F` answers from the case's program table and ends when its
+output does. Cases: none differ. Decided:
+
+- **The scrape cache is keyed by the config's repr**, not by
+  `json.dumps(sort_keys=True)`. It serves the same text for the same
+  config for 15 s; unlike json.dumps it never fails (1.x answers 500
+  when a mapping's names mix types and can't be sorted). No case has
+  such a config.
+- **A live-log line nested deeper than 512 levels is dropped.** 1.x's
+  json.loads raises RecursionError near Python's recursion limit, which
+  ends the stream. The SNI logger's lines don't nest.
+- **A sensor state file over 16 MiB reads as missing**, as on the
+  filtering screens (3b-2).

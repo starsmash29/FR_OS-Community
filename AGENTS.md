@@ -67,9 +67,9 @@ and `reference/test_fros_webui_cases.py`, which takes 1.x's webUI
 through sessions of requests (sign-in, accounts, second factors with a
 software security key, the apply buttons, the screens that edit the
 config, the filtering screens with the state files the
-sensor daemons leave, and the security checklist, the attack surface
-and the update screen) with a recorded clock, random
-bytes, helper answers and GitHub's answers to the update check, and records every answer and the files left. The
+sensor daemons leave, the security checklist, the attack surface,
+the update screen, the Prometheus metrics and the XDP live log) with a recorded clock, random
+bytes, helper answers, GitHub's answers to the update check and the event log `tail -F` reads, and records every answer and the files left. The
 Go packages replay those cases:
 
 - the config package must load the same YAML to the same values, write
@@ -163,7 +163,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time |
 | `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup (held to 1.x's `frfw.provision`, `frfw.transaction` and `frfw.apply`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
-| `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface and the update screen (read-only; the metrics and the XDP live log as they are ported), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS |
+| `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |
