@@ -130,8 +130,8 @@ func (s *System) Preflight(c *config.Config) error {
 	if c.Adblocker.Enabled {
 		checks = append(checks, check{"the ad-block DNS resolver", func() error { return s.preflightDnsmasq(c) }})
 	}
-	if c.XdpSniFilter.Enabled || len(s.xdpAttached()) > 0 {
-		checks = append(checks, check{"the XDP SNI filter", func() error { return errXDPNotPorted }})
+	if c.XdpSniFilter.Enabled {
+		checks = append(checks, check{"the XDP SNI filter", func() error { return s.checkXDP(c) }})
 	}
 	if c.IPv6.Enabled {
 		checks = append(checks, check{"IPv6", func() error { return s.checkIPv6(c) }})
@@ -389,7 +389,7 @@ func (r *run) steps() ([]string, error) {
 		return nil, err
 	}
 
-	tooLong, err := s.xdpTooLong(c)
+	blocklist, tooLong, err := s.xdpBlocklist(c)
 	if err != nil {
 		return nil, err
 	}
@@ -402,14 +402,13 @@ func (r *run) steps() ([]string, error) {
 			"DNS layer, which is a later and coarser one.", len(tooLong), MaxSNILen, sampleNames(tooLong)))
 	}
 	if !dry {
-		r.begin("the XDP SNI filter", func() error {
-			if len(s.xdpAttached()) > 0 {
-				return errXDPNotPorted
-			}
-			return nil
-		}, "")
+		undo, whyNot, err := r.xdpUndo()
+		if err != nil {
+			return nil, err
+		}
+		r.begin("the XDP SNI filter", undo, whyNot)
 	}
-	if err := add(s.syncXDP(c)); err != nil {
+	if err := add(s.syncXDP(c, blocklist, dry)); err != nil {
 		return nil, err
 	}
 	if c.TlsFingerprint.Enabled && !dry {

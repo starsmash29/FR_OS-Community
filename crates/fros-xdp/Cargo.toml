@@ -9,11 +9,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-
-[dev-dependencies]
-# Loads the kernel program and runs it on recorded frames
-# (BPF_PROG_TEST_RUN); pure Rust over the bpf() syscall, no libbpf.
+# Loads the kernel program, pins it and its maps, and keeps the maps
+# (fr-xdp); in the tests, runs it on recorded frames (BPF_PROG_TEST_RUN).
+# Pure Rust over the bpf() syscall, no libbpf: bpftool's libbpf no
+# longer reads aya-ebpf's legacy map section (src/pins.rs).
 aya = { version = "=0.14.0", default-features = false }
+# The event logger's JSON, as Python's json.dumps writes it.
 fros-sensor = { path = "../fros-sensor" }
 
 [lints]

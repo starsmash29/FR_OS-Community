@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -60,6 +61,8 @@ type fakeSystem struct {
 	calls     []call
 	tmpName   *regexp.Regexp
 	passed    map[int]int
+	// xdp answers the step's fr-xdp calls, in order (reference_xdp_test.go).
+	xdp []xdpAnswer
 }
 
 type call struct {
@@ -81,6 +84,14 @@ func (f *fakeSystem) run(c apply.Cmd) (apply.Result, error) {
 		argv[i] = f.norm(a)
 	}
 	f.calls = append(f.calls, call{argv, c.Stdin, c.Timeout})
+	if len(argv) > 0 && argv[0] == apply.XdpTool {
+		if len(f.xdp) == 0 || !slices.Equal(f.xdp[0].argv, argv) {
+			return apply.Result{Code: 1, Stderr: "the recording made no such call\n"}, nil
+		}
+		a := f.xdp[0]
+		f.xdp = f.xdp[1:]
+		return a.res, a.err
+	}
 	for i, a := range f.table {
 		if len(a.Argv) <= len(argv) && slices.Equal(argv[:len(a.Argv)], a.Argv) {
 			if f.passed[i] < a.After {
@@ -97,6 +108,28 @@ func (f *fakeSystem) run(c apply.Cmd) (apply.Result, error) {
 		}
 	}
 	return apply.Result{}, nil
+}
+
+// gro and setGRO are the GRO ioctl as the recording's pseudo-call: rc
+// the errno, stdout the value.
+func (f *fakeSystem) gro(device string) (bool, error) {
+	r, err := f.run(apply.Cmd{Argv: []string{"ioctl", "SIOCETHTOOL", device, "ETHTOOL_GGRO"}})
+	if err == nil && r.Code != 0 {
+		err = syscall.Errno(r.Code)
+	}
+	return strings.TrimSpace(r.Stdout) == "1", err
+}
+
+func (f *fakeSystem) setGRO(device string, on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	r, err := f.run(apply.Cmd{Argv: []string{"ioctl", "SIOCETHTOOL", device, "ETHTOOL_SGRO", v}})
+	if err == nil && r.Code != 0 {
+		err = syscall.Errno(r.Code)
+	}
+	return err
 }
 
 func (f *fakeSystem) nft(argv []string) (helper.NftResult, error) {
@@ -132,6 +165,8 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	sys := apply.DefaultSystem()
 	sys.Paths = apply.DefaultPaths().Under(root)
 	sys.Run = f.run
+	sys.GRO = f.gro
+	sys.SetGRO = f.setGRO
 	sys.Euid = func() int { return 0 }
 	sys.Now = func() time.Time { return now }
 	sys.Which = func(name string) string { return "/usr/bin/" + name }
@@ -157,34 +192,11 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 		return helper.Policy{FullUIDs: map[int]bool{0: true}, SensorUIDs: map[int]bool{}}
 	}}
 
-	if c.Decided == "xdp" {
-		// decisions.md, "applies": the XDP SNI filter isn't in FR_OS 2
-		// yet, so every apply of the config is refused before anything
-		// changes.
-		for i, step := range c.Steps {
-			line := append(bytes.Clone(step.Request), '\n')
-			got, err := s.Answer(bufio.NewReader(bytes.NewReader(line)), 1, 0)
-			text := marshal(t, got, err)
-			if okOf(text) || !strings.Contains(text, "the XDP SNI filter is not in FR_OS 2 yet") {
-				t.Errorf("step %d (decided: xdp): got %s", i, text)
-			}
-		}
-		got := snapshot(t, f, root)
-		delete(got, "etc/fr_os/.apply.lock") // taken, and left, by every apply
-		for _, rel := range slices.Sorted(maps.Keys(got)) {
-			if w, ok := c.Setup[rel]; !ok || !sameFile(got[rel], w) {
-				t.Errorf("a refused apply changed %s", rel)
-			}
-		}
-		for rel := range c.Setup {
-			if _, ok := got[rel]; !ok {
-				t.Errorf("a refused apply removed %s", rel)
-			}
-		}
-		return
-	}
+	bpftool := map[int]int{} // the table's bpftool answers given
 	for i, step := range c.Steps {
 		start := len(f.calls)
+		calls, answers := translateXDP(c.Table, bpftool, step.Calls)
+		f.xdp = answers
 		var got any
 		if later, ok := waitOf(t, step.Request); ok {
 			// fr-apply-revert.service, later seconds on; its sleeps move
@@ -202,7 +214,7 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 			got, err = s.Answer(bufio.NewReader(bytes.NewReader(line)), 1, 0)
 		}
 		where := fmt.Sprintf("step %d %s", i, step.Request)
-		checkCalls(t, where, f.calls[start:], step.Calls)
+		checkCalls(t, where, f.calls[start:], calls)
 		switch {
 		case step.Raised != "":
 			// 1.x sent no reply (decisions.md, "Errors 1.x lets through"):
@@ -213,8 +225,9 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 			}
 		default:
 			text := marshal(t, got, err)
-			if !sameJSON(t, f.norm(text), string(step.Reply)) && !samePythonJSONError(text, string(step.Reply)) {
-				t.Errorf("%s:\n%s", where, replyDiff(f.norm(text), string(step.Reply)))
+			want := strings.ReplaceAll(string(step.Reply), bpftoolMissing, xdpToolMissing)
+			if !sameJSON(t, f.norm(text), want) && !samePythonJSONError(text, want) {
+				t.Errorf("%s:\n%s", where, replyDiff(f.norm(text), want))
 			}
 		}
 	}
@@ -335,6 +348,9 @@ func sameInput(got string, want jsontext.Value) bool {
 	case string:
 		return got == x
 	case map[string]any:
+		if x["any"] == true {
+			return true
+		}
 		sum := sha256.Sum256([]byte(got))
 		return hex.EncodeToString(sum[:]) == x["sha256"]
 	}

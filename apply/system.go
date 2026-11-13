@@ -42,6 +42,9 @@ type Paths struct {
 	// XdpStats is the XDP SNI filter's pinned packet counters
 	// (frfw.xdp.PIN_STATS_PATH).
 	XdpStats string
+	// XdpObject is the XDP program the image ships; XdpPins is where it
+	// and its maps are pinned (prog/ and maps/), on bpffs.
+	XdpObject, XdpPins string
 	// The programs whose presence an apply checks by path.
 	DhcpcdBinary, RADnsmasqBinary string
 }
@@ -65,7 +68,8 @@ func DefaultPaths() Paths {
 		IPv6ULAState: "/etc/fr_os/ipv6_ula.json", WireguardKey: "/etc/fr_os/wireguard/private.key",
 		IPForward: "/proc/sys/net/ipv4/ip_forward", ProcNet: "/proc/sys/net", NetClass: "/sys/class/net",
 		Conntrack: "/proc/net/nf_conntrack", ZtnaState: "/etc/fr_os/ztna_state.json",
-		XdpStats:     "/sys/fs/bpf/fr_os_xdp/maps/stats",
+		XdpStats:  "/sys/fs/bpf/fr_os_xdp/maps/stats",
+		XdpObject: "/usr/local/share/fr_os/bpf/xdp_sni_filter.o", XdpPins: "/sys/fs/bpf/fr_os_xdp",
 		DhcpcdBinary: "/usr/sbin/dhcpcd", RADnsmasqBinary: "/usr/sbin/dnsmasq",
 	}
 }
@@ -137,6 +141,11 @@ type System struct {
 	// Fetch downloads one ad-block list (HTTPFetch): the only thing
 	// fetched from the internet, and only for a refresh.
 	Fetch func(url string) ([]byte, error)
+	// GRO reads whether generic receive offload is on for a device, and
+	// SetGRO turns it on or off (the SIOCETHTOOL ioctl, as 1.x: the
+	// router has no ethtool). An error is the ioctl's errno.
+	GRO    func(device string) (bool, error)
+	SetGRO func(device string, on bool) error
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;
@@ -154,6 +163,8 @@ func DefaultSystem() *System {
 		Sleep:          time.Sleep,
 		Chown:          os.Chown,
 		Fetch:          HTTPFetch,
+		GRO:            ethtoolGRO,
+		SetGRO:         ethtoolSetGRO,
 	}
 }
 

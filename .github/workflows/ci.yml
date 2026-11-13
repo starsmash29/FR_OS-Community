@@ -73,6 +73,18 @@ jobs:
           FROS_XDP_REQUIRED: "1"
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo -E
         run: cargo test --locked -p fros-xdp
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: an apply attaches the filter to a veth, as root (fr-xdp, ip)
+        env:
+          CGO_ENABLED: "0"
+          FROS_XDP_REQUIRED: "1"
+        run: |
+          cargo build --locked -p fros-xdp --bin fr-xdp
+          go test -c -o "$RUNNER_TEMP/apply.test" ./apply/
+          cd apply && sudo -E "$RUNNER_TEMP/apply.test" -test.run 'TestXdpRealAttach' -test.v
       - name: cargo audit (kernel side)
         working-directory: crates/fros-xdp-ebpf
         run: |

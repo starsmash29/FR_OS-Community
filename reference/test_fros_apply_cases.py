@@ -247,11 +247,34 @@ def system(monkeypatch, tmp_path):
         monkeypatch.setattr(ssl, "OPENSSL_VERSION", text)
         return fake
 
+    # Every module an apply uses is imported before the paths are moved:
+    # one first imported during a session would keep the router's paths.
+    from frfw import provision, xdp  # noqa: F401
+    from frfw.helper import server  # noqa: F401
+
     _reroot(monkeypatch, root)
     from frfw import management
 
     monkeypatch.setattr(management, "ssh_login_users", management.ssh_login_users)  # each session sets it
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: state["fake"].run(*a, **k))
+    # The XDP SNI filter as on an installed router: its object shipped,
+    # never compiled from a checkout (frfw.xdp.ensure_compiled); and GRO's
+    # SIOCETHTOOL ioctl answered from the case's table, as a call
+    # ["ioctl", "SIOCETHTOOL", device, command(, value)] whose rc is the
+    # errno and whose stdout is the value read.
+    monkeypatch.setattr(xdp, "_checkout_source", lambda: None)
+
+    def ethtool(device: str, cmd: int, data: int = 0) -> int:
+        name = {xdp._ETHTOOL_GGRO: "ETHTOOL_GGRO", xdp._ETHTOOL_SGRO: "ETHTOOL_SGRO"}[cmd]
+        argv = ["ioctl", "SIOCETHTOOL", xdp._device(device), name]
+        if cmd == xdp._ETHTOOL_SGRO:
+            argv.append(str(data))
+        proc = state["fake"].run(argv, text=True)
+        if proc.returncode:
+            raise OSError(proc.returncode, os.strerror(proc.returncode))
+        return int(proc.stdout) if proc.stdout.strip() else 0
+
+    monkeypatch.setattr(xdp, "_ethtool_value", ethtool)
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(os, "chown", lambda *a, **k: None)
     monkeypatch.setattr(os, "fchown", lambda *a, **k: None)
@@ -315,7 +338,7 @@ class _Response:
         return False
 
 
-def _snapshot(root: Path) -> dict:
+def _snapshot(root: Path, max_text: int = MAX_TEXT) -> dict:
     """The tree under root: each file's mode and text (with the root's
     path as the replay writes it), its digest when it is large."""
     files = {}
@@ -332,7 +355,7 @@ def _snapshot(root: Path) -> dict:
                 text = _rooted(data.decode("utf-8"), str(root))
             except UnicodeDecodeError:
                 text = None
-            if text is not None and len(text.encode()) > MAX_TEXT:
+            if text is not None and len(text.encode()) > max_text:
                 entry["sha256"] = hashlib.sha256(text.encode()).hexdigest()
                 entry["len"] = len(text.encode())
             elif text is not None:
@@ -393,7 +416,7 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
-    before = _snapshot(root)
+    before = _snapshot(root, max_text=1 << 20)  # in full: the replay writes it
     server = types.SimpleNamespace(
         config_path=root / "etc/fr_os/config.yaml", backup_dir=root / "etc/fr_os/backups",
         kea_config_path=root / "etc/kea/kea-dhcp4.conf", sensor_config_path=root / "etc/fr_os/sensor-config.yaml",
@@ -447,10 +470,18 @@ SYSCTLS = (("ipv6", "forwarding", "0"), ("ipv6", "accept_ra", "1"), ("ipv6", "ac
            ("ipv6", "keep_addr_on_down", "0"), ("ipv4", "promote_secondaries", "0"))
 
 
+#: The XDP program's object, as the image ships it (frfw.paths.XDP_BPF_OBJ_PATH).
+XDP_OBJECT = "usr/local/share/fr_os/bpf/xdp_sni_filter.o"
+XDP_OBJECT_TEXT = "an XDP object\n"
+XDP_DIGEST = hashlib.sha256(XDP_OBJECT_TEXT.encode()).hexdigest()
+
+
 def _setup(raw: dict) -> dict:
     text = yaml.safe_dump(raw, sort_keys=False)
     setup = {"etc/fr_os/config.yaml": text, "proc/sys/net/ipv4/ip_forward": "0\n", "usr/sbin/dhcpcd": "",
              "usr/sbin/dnsmasq": ""}
+    if (raw.get("xdp_sni_filter") or {}).get("enabled") is True:
+        setup[XDP_OBJECT] = XDP_OBJECT_TEXT
     for name in ["all", "default", "wg0"] + _devices(raw):
         if name not in ("all", "default", "wg0"):
             setup[f"sys/class/net/{name}/"] = ""
@@ -461,9 +492,9 @@ def _setup(raw: dict) -> dict:
 
 #: How many of the run's accepted configs are applied (every n-th, so
 #: they spread over 1.x's suite), and how many of those with the XDP SNI
-#: filter on (refused by decision).
+#: filter on.
 SAMPLE = 40
-SAMPLE_XDP = 4
+SAMPLE_XDP = 8
 
 RANDOM = hashlib.sha256(b"fr_os apply cases").digest() * 8
 
@@ -494,9 +525,7 @@ def test_apply_sampled(system):
     for n, (key, raw) in enumerate(_accepted()):
         setup = _setup(raw)
         requests = [{"cmd": "apply", "dry_run": True}, {"cmd": "apply"}] if n % 2 else [{"cmd": "apply"}]
-        xdp = (raw.get("xdp_sni_filter") or {}).get("enabled") is True
-        _session(system, f"apply/{key}", setup, requests, _links(setup["etc/fr_os/config.yaml"]), RANDOM,
-                 decided="xdp" if xdp else None)
+        _session(system, f"apply/{key}", setup, requests, _links(setup["etc/fr_os/config.yaml"]), RANDOM)
         root, _ = system
         shutil.rmtree(root)
         root.mkdir()
@@ -720,6 +749,207 @@ def test_hybrid_pqc(system):
 def test_failure(system, name):
     _session(system, f"failure/{name}", _tree(RICH2, RICH), [{"cmd": "apply", "confirm": True}],
              FAILURES[name] + [RUNNING] + _links(RICH2), RANDOM)
+
+
+# --- the XDP SNI filter (frfw.xdp.sync_sni_filter, phase 4d-2) -----------------------
+#
+# Loading, keeping, replacing and unloading the program, attaching it in
+# either mode (and GRO with generic mode), the blocklist, the settings,
+# the readers' restart, and every program failing in turn. Nothing runs:
+# `bpftool`, `ip` and the ioctl answer from the case's table, and the
+# pins are files in the case's tree.
+
+XDP = PLAIN + "xdp_sni_filter: {enabled: true, interfaces: [lan], blocklist: [ads.example.com, Tracker.Example.NET., " \
+              "tracker.example.net, a.b]}\n"
+XDP_TWO = XDP.replace("  lan: {device: eth1, zone: lan, address: 192.168.7.1/24}\n",
+                      "  lan: {device: eth1, zone: lan, address: 192.168.7.1/24}\n"
+                      "  guest: {device: eth2, zone: lan, address: 192.168.8.1/24}\n").replace(
+    "interfaces: [lan]", "interfaces: [lan, guest]")
+XDP_OFF = XDP.replace("{enabled: true, interfaces: [lan]", "{enabled: false, interfaces: [lan]")
+XDP_OBSERVE = XDP + "app_control: {enabled: true, observe_sni: true}\ntls_fingerprint: {enabled: true}\n"
+XDP_ADBLOCK = XDP + ("adblocker: {enabled: true, source_urls: [\"https://example.com/hosts\"], "
+                     "xdp_critical_limit: 5000}\n")
+XDP_RICH = RICH + "xdp_sni_filter: {enabled: true, interfaces: [lan], blocklist: [ads.example.com]}\n"
+XDP_RICH2 = RICH2 + "xdp_sni_filter: {enabled: true, interfaces: [lan], blocklist: [ads.example.com, b.example]}\n"
+
+PIN = "sys/fs/bpf/fr_os_xdp/"
+PINS = {PIN + "prog/xdp_sni_filter": "", PIN + "prog/xdp_sni_split": "", PIN + "maps/sni_blocklist": "",
+        PIN + "maps/stats": "", PIN + "maps/events": ""}
+OBSERVING_PINS = {**PINS, PIN + "maps/settings": "", PIN + "maps/hello_pkts": ""}
+BPFTOOL_PROG = ["bpftool", "-j", "prog", "show", "pinned", "@ROOT@/" + PIN + "prog/xdp_sni_filter"]
+BLOCKLIST_PIN = "@ROOT@/" + PIN + "maps/sni_blocklist"
+
+
+def _json_answer(argv, value) -> dict:
+    return {"argv": argv, "stdout": json.dumps(value)}
+
+
+def _state(attached: dict, program: str | None = XDP_DIGEST, gro_off: tuple = ()) -> str:
+    return json.dumps({"attached": attached, "program": program, "gro_off": list(gro_off)})
+
+
+def _xdp_link(device: str, mode: int, prog_id: int, name: str = "xdp_sni_filter", multi: bool = False) -> dict:
+    prog = {"id": prog_id, "name": name, "tag": "0123456789abcdef", "jited": 1}
+    xdp = {"attached": [{"mode": mode, "prog": prog}]} if multi else {"mode": mode, "prog": prog}
+    return _json_answer(["ip", "-j", "link", "show", "dev", device], [{"ifname": device, "xdp": xdp}])
+
+
+def _lpm(name: str) -> dict:
+    from frfw import xdp
+
+    key = xdp.build_lpm_key(name)
+    return {"key": {"prefixlen": int.from_bytes(key[:4], "little"), "reversed": list(key[4:4 + xdp.LPM_KEY_LEN])},
+            "value": 1}
+
+
+NATIVE_FAILS = {"argv": ["ip", "link", "set", "dev", "eth1", "xdpdrv"], "rc": 2,
+                "stderr": "Error: Underlying driver does not support XDP in native mode.\n"}
+PINNED_42 = {"argv": BPFTOOL_PROG, "stdout": json.dumps({"id": 42, "type": "xdp", "name": "xdp_sni_filter"})}
+OBJ = {XDP_OBJECT: XDP_OBJECT_TEXT}
+STATE = "etc/fr_os/xdp_state.json"
+
+XDP_SESSIONS = {
+    "native": (_tree(XDP, **OBJ), [{"cmd": "apply"}], []),
+    "dry run": (_tree(XDP, **OBJ), [{"cmd": "apply", "dry_run": True}], []),
+    "two devices": (_tree(XDP_TWO, **OBJ), [{"cmd": "apply"}], [
+        {"argv": ["ip", "link", "set", "dev", "eth2", "xdpdrv"], "rc": 2, "stderr": "Error: native.\n"},
+        {"argv": ["ioctl", "SIOCETHTOOL", "eth2", "ETHTOOL_GGRO"], "stdout": "1"}]),
+    "generic, gro off": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        NATIVE_FAILS, {"argv": ["ioctl", "SIOCETHTOOL", "eth1", "ETHTOOL_GGRO"], "stdout": "1"}]),
+    "generic, gro already off": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        NATIVE_FAILS, {"argv": ["ioctl", "SIOCETHTOOL", "eth1", "ETHTOOL_GGRO"], "stdout": "0"}]),
+    "generic, gro unreadable": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        NATIVE_FAILS, {"argv": ["ioctl", "SIOCETHTOOL", "eth1", "ETHTOOL_GGRO"], "rc": 95}]),
+    "generic, gro stays on": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        NATIVE_FAILS, {"argv": ["ioctl", "SIOCETHTOOL", "eth1", "ETHTOOL_GGRO"], "stdout": "1"},
+        {"argv": ["ioctl", "SIOCETHTOOL", "eth1", "ETHTOOL_SGRO"], "rc": 1}]),
+    "attach fails": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        NATIVE_FAILS, {"argv": ["ip", "link", "set", "dev", "eth1", "xdpgeneric"], "rc": 2,
+                       "stderr": "Error: no such device.\n"}]),
+    "kept": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42), PINNED_42,
+        _json_answer(["bpftool", "map", "dump", "pinned", BLOCKLIST_PIN], [_lpm("ads.example.com"), _lpm("old.example")])]),
+    "kept, generic, gro back on": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpgeneric"})}),
+                                   [{"cmd": "apply"}], [
+        _xdp_link("eth1", 2, 42, multi=True), PINNED_42,
+        {"argv": ["ioctl", "SIOCETHTOOL", "eth1", "ETHTOOL_GGRO"], "stdout": "1"}]),
+    "kept, native, gro was off": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"}, gro_off=["eth1"])}),
+                                  [{"cmd": "apply"}], [_xdp_link("eth1", 1, 42), PINNED_42]),
+    "older program attached": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 7), PINNED_42]),
+    "other program attached": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 9, name="someone_else"), PINNED_42]),
+    "pinned id unknown": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 7), {"argv": BPFTOOL_PROG, "rc": 255, "stderr": "Error: bpf obj get: No such file\n"}]),
+    "after reboot": (_tree(XDP, **OBJ, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], []),
+    "replaced": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"}, program="0" * 64)}),
+                 [{"cmd": "apply"}], [_xdp_link("eth1", 1, 7), PINNED_42]),
+    "replaced, origin unknown": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"}, program=None)}),
+                                 [{"cmd": "apply"}], [_xdp_link("eth1", 1, 7), PINNED_42]),
+    "replace fails": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"}, program="0" * 64)}),
+                      [{"cmd": "apply"}], [
+        {"argv": ["bpftool", "prog", "loadall"], "rc": 255, "stderr": "libbpf: prog 'x': BPF program load failed\n"}]),
+    "load fails": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        {"argv": ["bpftool", "prog", "loadall"], "rc": 255, "stderr": "libbpf: failed to load object\n"}]),
+    "no object": (_tree(XDP), [{"cmd": "apply"}], []),
+    "no bpftool": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [{"argv": ["bpftool"], "error": "missing"}]),
+    "blocklist dump fails": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        {"argv": ["bpftool", "map", "dump"], "rc": 255, "stderr": "Error: bpf obj get\n"}]),
+    "blocklist update fails": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        {"argv": ["bpftool", "map", "update"], "after": 1, "rc": 255, "stderr": "Error: update failed\n"}]),
+    "blocklist delete fails": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _json_answer(["bpftool", "map", "dump", "pinned", BLOCKLIST_PIN], [_lpm("old.example")]),
+        {"argv": ["bpftool", "map", "delete"], "rc": 255, "stderr": "Error: delete failed\n"}]),
+    "link unreadable": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        {"argv": ["ip", "-j", "link", "show", "dev", "eth1"], "stdout": "{not json"}, PINNED_42]),
+    "link fails": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        {"argv": ["ip", "-j", "link", "show", "dev", "eth1"], "rc": 1, "stderr": "Device does not exist.\n"},
+        PINNED_42]),
+    "device dropped": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv", "eth2": "xdpgeneric"},
+                                                                  gro_off=["eth2"])}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42), _xdp_link("eth2", 2, 42), PINNED_42]),
+    "device dropped, gone": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv", "eth9": "xdpgeneric"},
+                                                                        gro_off=["eth9"])}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42), PINNED_42, {"argv": ["ioctl", "SIOCETHTOOL", "eth9"], "rc": 19}]),
+    "detach fails": (_tree(XDP, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 7), PINNED_42,
+        {"argv": ["ip", "link", "set", "dev", "eth1", "xdpdrv", "off"], "rc": 2, "stderr": "Error: busy.\n"}]),
+    "observing": (_tree(XDP_OBSERVE, **OBJ, **OBSERVING_PINS, **{STATE: _state({"eth1": "xdpdrv"})}),
+                  [{"cmd": "apply"}], [_xdp_link("eth1", 1, 42), PINNED_42]),
+    "observing, old program": (_tree(XDP_OBSERVE, **OBJ, **PINS, **{PIN + "maps/settings": ""},
+                                     **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42), PINNED_42]),
+    "observing, older program": (_tree(XDP_OBSERVE, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}),
+                                 [{"cmd": "apply"}], [_xdp_link("eth1", 1, 42), PINNED_42]),
+    "observing, settings fail": (_tree(XDP_OBSERVE, **OBJ, **OBSERVING_PINS, **{STATE: _state({"eth1": "xdpdrv"})}),
+                                 [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42), PINNED_42,
+        {"argv": ["bpftool", "map", "update", "pinned", "@ROOT@/" + PIN + "maps/settings"], "rc": 255,
+         "stderr": "Error: update failed\n"}]),
+    "settings off": (_tree(XDP, **OBJ, **OBSERVING_PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42), PINNED_42]),
+    "readers fail": (_tree(XDP, **OBJ), [{"cmd": "apply"}], [
+        {"argv": ["systemctl", "try-restart", "--", "fr-xdp-sni-logger.service"], "rc": 5, "stderr": "failed\n"},
+        {"argv": ["systemctl", "try-restart", "--", "fr-tls-fp.service"], "error": "timeout"}]),
+    "off": (_tree(XDP_OFF, **PINS, **{STATE: _state({"eth1": "xdpgeneric"}, gro_off=["eth1"])}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 2, 42)]),
+    "off, dry run": (_tree(XDP_OFF, **PINS, **{STATE: _state({"eth1": "xdpgeneric"})}),
+                     [{"cmd": "apply", "dry_run": True}], [_xdp_link("eth1", 2, 42)]),
+    "off, nothing attached": (_tree(XDP_OFF, **{STATE: _state({})}), [{"cmd": "apply"}], []),
+    "off, after reboot": (_tree(XDP_OFF, **{STATE: _state({"eth1": "xdpdrv", "eth2": "xdpgeneric"},
+                                                          gro_off=["eth2"])}), [{"cmd": "apply"}], [
+        {"argv": ["ioctl", "SIOCETHTOOL", "eth2"], "rc": 19}]),
+    "off, detach fails": (_tree(XDP_OFF, **PINS, **{STATE: _state({"eth1": "xdpdrv"})}), [{"cmd": "apply"}], [
+        _xdp_link("eth1", 1, 42),
+        {"argv": ["ip", "link", "set", "dev", "eth1", "xdpdrv", "off"], "rc": 2, "stderr": "Error: busy.\n"}]),
+    "state unreadable": (_tree(XDP, **OBJ, **{STATE: "{not json"}), [{"cmd": "apply"}], []),
+    "state odd": (_tree(XDP, **OBJ, **{STATE: json.dumps({"attached": {"eth1": "xdpdrv"}, "program": 5,
+                                                          "gro_off": ["eth1", 3]})}), [{"cmd": "apply"}], []),
+    "state not a list": (_tree(XDP, **OBJ, **{STATE: json.dumps({"attached": {}, "gro_off": "eth1"})}),
+                         [{"cmd": "apply"}], []),
+    "too many names": (_tree(XDP_ADBLOCK, **OBJ, **{"etc/fr_os/adblock.hosts": "".join(
+        f"0.0.0.0 d{i}.example\n" for i in range(4100))}), [{"cmd": "apply"}], []),
+    "names from the ad-block list": (_tree(XDP_ADBLOCK, **OBJ, **{"etc/fr_os/adblock.hosts":
+        "0.0.0.0 Zz.Example.\n0.0.0.0 ads.example.com\n0.0.0.0 " + "x" * 40 + ".example\n"}),
+        [{"cmd": "apply"}], []),
+    "ad-block name not ASCII": (_tree(XDP_ADBLOCK, **OBJ, **{"etc/fr_os/adblock.hosts": "0.0.0.0 b\u00fccher.de\n"}),
+                                [{"cmd": "apply"}], []),
+    "ad-block name only dots": (_tree(XDP_ADBLOCK, **OBJ, **{"etc/fr_os/adblock.hosts": "0.0.0.0 ...\n"}),
+                                [{"cmd": "apply"}], []),
+}
+
+
+@pytest.mark.parametrize("name", sorted(XDP_SESSIONS))
+def test_xdp_session(system, name):
+    setup, requests, table = XDP_SESSIONS[name]
+    _session(system, f"xdp/{name}", setup, requests, table + _links(setup["etc/fr_os/config.yaml"]), RANDOM)
+
+
+#: A later step fails: the filter goes back to the previous config's.
+XDP_FAILURES = {
+    "ssh reload": [{"argv": ["systemctl", "try-reload-or-restart", "--", "ssh"], "rc": 1, "stderr": "failed\n"}],
+    "webui listening": [{"argv": ["ss"], "stdout": "LISTEN 0 4096 127.0.0.1:443 0.0.0.0:*\n"}],
+}
+
+
+@pytest.mark.parametrize("name", sorted(XDP_FAILURES))
+def test_xdp_failure(system, name):
+    setup = _tree(XDP_RICH2, XDP_RICH, **OBJ, **PINS, **{STATE: _state({"eth1": "xdpdrv"})})
+    _session(system, f"xdp failure/{name}", setup, [{"cmd": "apply", "confirm": True}],
+             XDP_FAILURES[name] + [_xdp_link("eth1", 1, 42), PINNED_42, RUNNING] + _links(XDP_RICH2), RANDOM)
+
+
+def test_xdp_failure_nothing_applied(system):
+    """No config was applied before: the filter's undo is unknown unless
+    nothing was attached or loaded."""
+    for name, extra in (("unknown", {**PINS, STATE: _state({"eth1": "xdpdrv"})}), ("fresh", {})):
+        setup = _tree(XDP_RICH2, None, **OBJ, **extra)
+        _session(system, f"xdp failure/nothing applied, {name}", setup, [{"cmd": "apply"}],
+                 XDP_FAILURES["ssh reload"] + [_xdp_link("eth1", 1, 42), PINNED_42, RUNNING] + _links(XDP_RICH2),
+                 RANDOM)
+        root, _ = system
+        shutil.rmtree(root)
+        root.mkdir()
 
 
 # --- the commands that act on one host (phase 2c-1) ---------------------------------
