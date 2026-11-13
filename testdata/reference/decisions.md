@@ -359,3 +359,42 @@ output does. Cases: none differ. Decided:
   ends the stream. The SNI logger's lines don't nest.
 - **A sensor state file over 16 MiB reads as missing**, as on the
   filtering screens (3b-2).
+
+## 2026-11-13: TLS client fingerprinting (phase 4a)
+
+Proposed in FR_OS-Community PR #27; decided with the owner's "Mehet".
+
+`crates/fros-tlsfp` replays every case of tlsfp.jsonl
+(`reference/test_fros_tlsfp_cases.py`): ClientHellos, record streams,
+reassembly, the inventory and its state file. Hellos, records,
+reassembly and the inventory's own updates: none differ. Restoring the
+inventory from its state file: nine cases differ, listed by name in
+`DECIDED` (crates/fros-tlsfp/tests/reference.rs). Decided:
+
+- **Where 1.x's restore raises an exception it doesn't catch, FR_OS 2
+  starts with an empty inventory.** 1.x's daemon dies on such a file
+  (an int too large for a float, a non-dict `clients` or
+  `network_first_seen`, a number in place of `events`, bytes that
+  aren't UTF-8, an int over 4,300 digits, nesting deeper than Python's
+  recursion limit) and systemd restarts it onto the same file, for
+  good. The recorded cases keep 1.x's exception name; the replay
+  expects an empty inventory for them. They all pass.
+- **A list or dict inside a row's `ja3` or `sni` skips the row.** 1.x
+  writes its Python repr (`"[]"`, `"{'k': 'v'}"`) into the list, which
+  would need Python's repr of any string, Unicode tables included.
+  Cases: "ja3 item list", "ja3 item empty list", "ja3 item dict",
+  "ja3 item empty dict", "ja3 nested".
+- **Numbers written as text take ASCII digits only.** Python's `int()`
+  and `float()` also read other Unicode decimal digits ("\u0669" is 9).
+  Cases: "started '\u0669'", "first_seen '\u0669'", "count '\u0669'".
+- **A lone surrogate escape ("\ud83d") reads as U+FFFD.** Python keeps
+  it in the string; a Rust string can't hold one. Case: "lone high in
+  key" (a client named by one). A lone surrogate in a value the
+  inventory ignores changes nothing.
+- **Nesting is capped at 10,000 levels**, refused as Python's recursion
+  limit refuses deeper nesting. Where exactly Python's limit falls
+  depends on its version and stack; the cases nest 5,000 levels (read
+  by both) and 100,000 (refused by both).
+
+The state file's size cap, and what the daemon does with what it
+restores, come with the daemon (phase 4e).
