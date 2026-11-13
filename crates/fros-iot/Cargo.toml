@@ -1,0 +1,18 @@
+[package]
+name = "fros-iot"
+description = "IoT device discovery (MAC vendors, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file), held to FR_OS 1.x's frfw.iot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+fros-sensor = { path = "../fros-sensor" }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

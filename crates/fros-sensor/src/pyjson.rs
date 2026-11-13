@@ -441,6 +441,53 @@ fn dump_into(out: &mut String, value: &Value) {
     }
 }
 
+/// `json.dumps(value, indent=2, sort_keys=True)`: the layout of the
+/// IoT inventory's state file. Keys sort by code point, which is the
+/// byte order of their UTF-8.
+pub fn dumps_indent_sorted(value: &Value) -> String {
+    let mut out = String::new();
+    dump_indented(&mut out, value, 0);
+    out
+}
+
+fn dump_indented(out: &mut String, value: &Value, level: usize) {
+    let newline = |out: &mut String, level: usize| {
+        out.push('\n');
+        out.push_str(&"  ".repeat(level));
+    };
+    match value {
+        Value::List(items) if !items.is_empty() => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                newline(out, level + 1);
+                dump_indented(out, item, level + 1);
+            }
+            newline(out, level);
+            out.push(']');
+        }
+        Value::Dict(dict) if !dict.0.is_empty() => {
+            let mut entries: Vec<&(String, Value)> = dict.0.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            out.push('{');
+            for (i, (k, v)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                newline(out, level + 1);
+                dump_str(out, k);
+                out.push_str(": ");
+                dump_indented(out, v, level + 1);
+            }
+            newline(out, level);
+            out.push('}');
+        }
+        other => dump_into(out, other),
+    }
+}
+
 /// A string as `json.dumps` writes it with `ensure_ascii`: everything
 /// outside space..'~' escaped, astral characters as surrogate pairs.
 fn dump_str(out: &mut String, s: &str) {
@@ -723,6 +770,17 @@ pub fn int_plus_one(decimal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indented_dumps_is_pythons() {
+        // json.dumps(v, indent=2, sort_keys=True) of
+        // {"b": [], "a": {}, "c": [1, {"x": [], "\u00e9": "\u00e9"}]}
+        let v = loads(br#"{"b": [], "a": {}, "c": [1, {"x": [], "\u00e9": "\u00e9"}]}"#).unwrap();
+        assert_eq!(
+            dumps_indent_sorted(&v),
+            "{\n  \"a\": {},\n  \"b\": [],\n  \"c\": [\n    1,\n    {\n      \"x\": [],\n      \"\\u00e9\": \"\\u00e9\"\n    }\n  ]\n}"
+        );
+    }
 
     #[test]
     fn float_repr_is_pythons() {

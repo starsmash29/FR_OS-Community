@@ -78,10 +78,15 @@ and broken, and records each answer;
 `reference/test_fros_appid_cases.py`, which feeds 1.x's application
 identification its catalog broken every way, names to match, usage
 counts with state files valid and broken, and the lines of the
-resolver's query log and the SNI event file; and
+resolver's query log and the SNI event file;
 `reference/test_fros_aiids_cases.py`, which feeds 1.x's AI-IDS the
 names its DGA heuristic scores, the numbers its statistics average, and
-seeded traffic of every kind, and records every verdict. The Go packages and the Rust
+seeded traffic of every kind, and records every verdict; and
+`reference/test_fros_iot_cases.py`, which feeds 1.x's IoT discovery
+MAC addresses, the IEEE registry and the neighbour table in every
+shape, mDNS answers built, damaged and random, devices to score, and
+whole scans with every helper answer, mDNS result and file injected,
+and records the inventory file each scan writes. The Go packages and the Rust
 crates replay those cases:
 
 - the config package must load the same YAML to the same values, write
@@ -103,7 +108,10 @@ crates replay those cases:
   (or give the same error text), attribute every name to the same app,
   and write the same usage state file, byte for byte;
 - the AI-IDS crate must give the same DGA verdict and flag the same
-  hosts with the same score, to the last bit of every float.
+  hosts with the same score, to the last bit of every float;
+- the IoT crate must read the same vendors and neighbours, find the
+  same mDNS service types, score every device the same, ask the
+  helpers the same and write the same inventory file, byte for byte.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -187,7 +195,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS. The Go webUI is what ships (`systemd/fr-webui.service` runs `/usr/libexec/fr_os/fr-webui` as `fr_os-webui`); FR_OS 1.x is reference only |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
-| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`) |
+| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`); `crates/fros-iot` is IoT discovery (MAC vendors from the IEEE registry, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file, read from the sensor's JSON view of the config), held to 1.x's `frfw.iot` (`iot.jsonl`) |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |

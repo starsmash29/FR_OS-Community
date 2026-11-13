@@ -45,6 +45,16 @@ pub fn is_decimal(c: char) -> bool {
     in_table(DECIMAL, c)
 }
 
+/// The value of a Unicode decimal digit (`unicodedata.decimal`): every
+/// range of the table is whole runs of ten, 0 to 9.
+pub fn decimal_value(c: char) -> Option<u32> {
+    let code = u32::from(c);
+    DECIMAL
+        .iter()
+        .find(|&&(lo, hi)| lo <= code && code <= hi)
+        .map(|&(lo, _)| (code - lo) % 10)
+}
+
 /// `str.isprintable()` of one character.
 pub fn is_printable(c: char) -> bool {
     !in_table(NOT_PRINTABLE, c)

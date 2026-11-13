@@ -4,9 +4,10 @@
   "apply": 164,
   "config": 1884,
   "helper": 483,
+  "iot": 1901,
   "qr": 28,
   "render": 1662,
-  "ruleset": 2211,
+  "ruleset": 2210,
   "skipped": {
     "config_not_json": 13,
     "ruleset_not_json": 0,
@@ -15,6 +16,6 @@
   },
   "tlsfp": 5452,
   "webui": 119,
-  "yaml": 1896,
-  "yaml_config": 290
+  "yaml": 1897,
+  "yaml_config": 291
 }

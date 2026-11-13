@@ -452,3 +452,37 @@ Which sources the AI-IDS daemon scores (internal networks, IPv6 hosts
 by MAC), its conntrack sampling and its quarantine come with the daemon
 (phase 4e); the line readers here only parse, and the case file records
 them with every source passed through.
+
+## 2026-11-13: IoT discovery (phase 4c)
+
+Proposed in the FR_OS-Community PR for phase 4c.
+
+`crates/fros-iot` replays every case of iot.jsonl
+(`reference/test_fros_iot_cases.py`): MAC normalization and vendor
+lookups; the IEEE registry read through a port of CPython's `csv`
+reader (quoting, line ends, bad UTF-8, the 131,072-character field
+limit and its `_csv.Error`); the kernel's neighbour table (Python's
+`splitlines`, `split` and `int(flags, 16)`, its UnicodeDecodeError on
+bad UTF-8); the mDNS query and its parser over handcrafted, damaged and
+random packets; the IoT scoring; whole scans (messages, devices, the
+helper calls and the inventory file byte for byte); and the resync
+from an inventory. No case differs; `DECIDED` is empty.
+
+Decided:
+
+- **The scanner reads a per-sensor JSON view, never the YAML config.**
+  The Go side writes it at apply time (phase 4e): the IoT zones'
+  interfaces in config order with their static address as
+  `a.b.c.d/len` or null, `trusted_macs`, `isolated_macs`,
+  `auto_isolate` and `isolation_mode`. The case file records each
+  scan's view and has 1.x scan a config built from it, so the view is
+  all a scan reads.
+- **The files the scanner reads have a size limit** (AGENTS.md: every
+  read has one; 1.x has none): an IEEE registry past 64 MiB reads as
+  missing (today's is about 3 MB), the neighbour table is read up to
+  16 MiB. No case reaches either.
+
+The helper calls (`dhcp_leases`, `iot_sync_isolation`), the mDNS
+socket (`discover`), writing the inventory file and what the daemon
+does when a scan hits an exception 1.x doesn't catch (recorded here by
+name, as `Crash`) come with the daemon (phase 4e).
