@@ -101,6 +101,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fros-iot"
+version = "2.0.0-dev"
+dependencies = [
+ "fros-sensor",
+ "proptest",
+]
+
+[[package]]
 name = "fros-ipc"
 version = "2.0.0-dev"
 dependencies = [

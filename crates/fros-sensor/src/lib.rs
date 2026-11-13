@@ -1,4 +1,4 @@
-//! What FR_OS 2's sensor crates (fros-tlsfp, fros-appid, fros-aiids)
+//! What FR_OS 2's sensor crates (fros-tlsfp, fros-appid, fros-aiids, fros-iot)
 //! share to answer exactly as FR_OS 1.x's Python does: the differential
 //! tests compare their output with 1.x's byte for byte, so Python's
 //! rules are spelled out here once rather than approximated in each.

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/fros-aiids",
     "crates/fros-appid",
+    "crates/fros-iot",
     "crates/fros-ipc",
     "crates/fros-sensor",
     "crates/fros-tlsfp",
