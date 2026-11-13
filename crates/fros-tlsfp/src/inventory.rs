@@ -9,8 +9,8 @@
 //! can't grow it without limit, and it round-trips through the JSON
 //! state file, byte for byte as 1.x writes it.
 
-use crate::ordered::{OrderedMap, py_max, py_min_by};
-use crate::pyjson::{Dict, PyError, Value, int_plus_one, py_float, py_int, py_str};
+use fros_sensor::ordered::{OrderedMap, py_max, py_min_by};
+use fros_sensor::pyjson::{Dict, PyError, Value, int_plus_one, py_float, py_int, py_str};
 
 /// No "new fingerprint" events until the inventory is this old: at
 /// first every fingerprint is new.

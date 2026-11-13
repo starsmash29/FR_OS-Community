@@ -1,0 +1,18 @@
+[package]
+name = "fros-appid"
+description = "Application identification from DNS names and TLS SNIs (the catalog, name matching, per-app usage and its state file, the log readers), held to FR_OS 1.x's frfw.appid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+fros-sensor = { path = "../fros-sensor" }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

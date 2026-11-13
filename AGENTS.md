@@ -63,18 +63,25 @@ lists, through its
 apply-helper against a fake system (every path under a directory of its
 own, every program and every download answered from a table, steps
 made to fail one by one) and records the programs run, the replies and the files left;
-and `reference/test_fros_webui_cases.py`, which takes 1.x's webUI
+`reference/test_fros_webui_cases.py`, which takes 1.x's webUI
 through sessions of requests (sign-in, accounts, second factors with a
 software security key, the apply buttons, the screens that edit the
 config, the filtering screens with the state files the
 sensor daemons leave, the security checklist, the attack surface,
 the update screen, the Prometheus metrics and the XDP live log) with a recorded clock, random
 bytes, helper answers, GitHub's answers to the update check and the event log `tail -F` reads, and records every answer and the files left;
-and `reference/test_fros_tlsfp_cases.py`, which feeds 1.x's TLS
+`reference/test_fros_tlsfp_cases.py`, which feeds 1.x's TLS
 fingerprinting library ClientHellos and TLS record streams of every
 shape (prefixes, wrong lengths, odd extensions, seeded random damage),
 segments in and out of order, and its inventory with state files valid
-and broken, and records each answer. The Go packages and the Rust
+and broken, and records each answer;
+`reference/test_fros_appid_cases.py`, which feeds 1.x's application
+identification its catalog broken every way, names to match, usage
+counts with state files valid and broken, and the lines of the
+resolver's query log and the SNI event file; and
+`reference/test_fros_aiids_cases.py`, which feeds 1.x's AI-IDS the
+names its DGA heuristic scores, the numbers its statistics average, and
+seeded traffic of every kind, and records every verdict. The Go packages and the Rust
 crates replay those cases:
 
 - the config package must load the same YAML to the same values, write
@@ -91,7 +98,12 @@ crates replay those cases:
   in the same order, answer the same, and leave the same files;
 - the TLS fingerprinting crate must parse the same fields, compute the
   same JA3 and JA4, give the same error text, reassemble the same
-  message and write the same state file, byte for byte.
+  message and write the same state file, byte for byte;
+- the application identification crate must parse the same catalog
+  (or give the same error text), attribute every name to the same app,
+  and write the same usage state file, byte for byte;
+- the AI-IDS crate must give the same DGA verdict and flag the same
+  hosts with the same score, to the last bit of every float.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -175,7 +187,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS. The Go webUI is what ships (`systemd/fr-webui.service` runs `/usr/libexec/fr_os/fr-webui` as `fr_os-webui`); FR_OS 1.x is reference only |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
-| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`) |
+| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`) |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |

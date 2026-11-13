@@ -9,9 +9,11 @@
 pub mod clienthello;
 pub mod fingerprint;
 pub mod inventory;
-mod ordered;
-pub mod pyjson;
 pub mod reassembly;
+
+/// The Python-dialect JSON reader and writer, now shared by the sensor
+/// crates (crates/fros-sensor).
+pub use fros_sensor::pyjson;
 
 pub use clienthello::{
     ClientHello, MAX_HELLO_BYTES, ParseError, handshake_from_records, is_grease, parse_client_hello,

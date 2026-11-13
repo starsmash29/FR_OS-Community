@@ -1,0 +1,23 @@
+[package]
+name = "fros-sensor"
+description = "What FR_OS 2's sensor crates share to be held to FR_OS 1.x's Python: its JSON dialect, dict order, text rules and exact float arithmetic, and dnsmasq's log prefix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# statistics.mean/pstdev and round() in 1.x are exact (fractions of
+# big integers, correctly rounded); num-bigint (MIT OR Apache-2.0, pure
+# Rust, no unsafe of ours) gives the integers.
+num-bigint = "0.4"
+num-integer = "0.1"
+num-traits = "0.2"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
