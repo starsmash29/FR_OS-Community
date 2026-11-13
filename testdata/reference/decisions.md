@@ -362,6 +362,8 @@ output does. Cases: none differ. Decided:
 
 ## 2026-11-13: TLS client fingerprinting (phase 4a)
 
+Proposed in FR_OS-Community PR #27; decided with the owner's "Mehet".
+
 `crates/fros-tlsfp` replays every case of tlsfp.jsonl
 (`reference/test_fros_tlsfp_cases.py`): ClientHellos, record streams,
 reassembly, the inventory and its state file. Hellos, records,
