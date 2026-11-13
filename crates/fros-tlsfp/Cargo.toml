@@ -1,0 +1,21 @@
+[package]
+name = "fros-tlsfp"
+description = "TLS client fingerprinting library (JA3, JA4, ClientHello reassembly, the fingerprint inventory), held to FR_OS 1.x's frfw.tlsfp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# JA3 is an MD5 and JA4 a truncated SHA-256 by definition; RustCrypto's
+# pure-Rust implementations (MIT OR Apache-2.0), no C, no unsafe of ours.
+md-5 = "0.10"
+sha2 = "0.10"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

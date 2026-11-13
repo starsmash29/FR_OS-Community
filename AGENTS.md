@@ -69,8 +69,13 @@ software security key, the apply buttons, the screens that edit the
 config, the filtering screens with the state files the
 sensor daemons leave, the security checklist, the attack surface,
 the update screen, the Prometheus metrics and the XDP live log) with a recorded clock, random
-bytes, helper answers, GitHub's answers to the update check and the event log `tail -F` reads, and records every answer and the files left. The
-Go packages replay those cases:
+bytes, helper answers, GitHub's answers to the update check and the event log `tail -F` reads, and records every answer and the files left;
+and `reference/test_fros_tlsfp_cases.py`, which feeds 1.x's TLS
+fingerprinting library ClientHellos and TLS record streams of every
+shape (prefixes, wrong lengths, odd extensions, seeded random damage),
+segments in and out of order, and its inventory with state files valid
+and broken, and records each answer. The Go packages and the Rust
+crates replay those cases:
 
 - the config package must load the same YAML to the same values, write
   the same YAML for them (yaml.safe_dump), and accept and refuse the
@@ -83,7 +88,10 @@ Go packages replay those cases:
   compared as HTML tokens), ask the helpers the same and leave the same
   files;
 - an apply must run the same programs, with the same input and timeout,
-  in the same order, answer the same, and leave the same files.
+  in the same order, answer the same, and leave the same files;
+- the TLS fingerprinting crate must parse the same fields, compute the
+  same JA3 and JA4, give the same error text, reassemble the same
+  message and write the same state file, byte for byte.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -167,7 +175,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS. The Go webUI is what ships (`systemd/fr-webui.service` runs `/usr/libexec/fr_os/fr-webui` as `fr_os-webui`); FR_OS 1.x is reference only |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
-| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format |
+| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`) |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |
