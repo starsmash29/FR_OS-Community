@@ -398,3 +398,57 @@ inventory from its state file: nine cases differ, listed by name in
 
 The state file's size cap, and what the daemon does with what it
 restores, come with the daemon (phase 4e).
+
+## 2026-11-13: application identification and AI-IDS scoring (phase 4b)
+
+Proposed in the FR_OS-Community PR for phase 4b.
+
+`crates/fros-appid` replays every case of appid.jsonl
+(`reference/test_fros_appid_cases.py`): the catalog parser and its
+error texts, name matching, blocking lists, the usage tracker and its
+state file, the daemon's de-duplication and its two line readers.
+`crates/fros-aiids` replays every case of aiids.jsonl
+(`reference/test_fros_aiids_cases.py`): the DGA heuristic, Python's
+`statistics.mean`/`pstdev` and `round`, every `evaluate()` of the
+anomaly engine, and the AI-IDS daemon's two line readers. The shared
+Python rules (JSON dialect, dict order, text classes, exact float
+arithmetic) moved into `crates/fros-sensor`, which fros-tlsfp now uses
+too; no tlsfp case changes.
+
+Python's exact arithmetic is reproduced, not approximated: the mean and
+standard deviation of a host's baseline are exact fractions rounded
+once (num-bigint), `round(x, n)` rounds the float's exact value ties to
+even, and the entropy sum is Neumaier-compensated as Python 3.12+'s
+`sum`. All recorded scores match to the last bit. `str()` and `repr()`
+of any JSON value (catalog entries, error texts) are Python's, with its
+Unicode tables generated from the recording Python
+(`crates/fros-sensor/gen_unicode_tables.py`).
+
+Nine cases differ, listed by name in `DECIDED`
+(crates/fros-appid/tests/reference.rs, crates/fros-aiids/tests/reference.rs).
+Decided:
+
+- **A lone surrogate escape reads as U+FFFD**, as in phase 4a. Cases:
+  usage "lone surrogate key"; appid and AI-IDS sni_line with
+  `"\ud800x"` / `"\udc00"`.
+- **Numbers written as text take ASCII digits only**, as in phase 4a;
+  such a usage row is skipped. Cases: usage `first_seen "١"`,
+  `last_seen "١"`, `bucket count "١"`.
+- **A usage hit count or bucket past i128 skips the row.** Python keeps
+  `int(1e308)`, a 309-digit int; nothing the daemon writes comes near
+  i128. Case: usage `bucket count 1e+308`.
+- **An SNI event line nested past Python's recursion limit is skipped.**
+  In 1.x the RecursionError escapes the line reader and ends that
+  reader's thread, so the daemon stops reading the event file until it
+  restarts. Cases: appid and AI-IDS sni_line `[[[[...`.
+
+Where 1.x's usage restore raises an exception it doesn't catch (an int
+too large for a float, an infinite hit count), `UsageTracker::restore`
+returns that exception's name, as recorded (these cases pass); what
+the daemon does then (1.x's dies at start) is decided with the daemon
+(phase 4e), as for the TLS inventory.
+
+Which sources the AI-IDS daemon scores (internal networks, IPv6 hosts
+by MAC), its conntrack sampling and its quarantine come with the daemon
+(phase 4e); the line readers here only parse, and the case file records
+them with every source passed through.

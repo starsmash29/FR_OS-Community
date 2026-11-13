@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::hash::Hash;
 
 use crate::clienthello::{MAX_HELLO_BYTES, ParseError, handshake_from_records};
-use crate::ordered::{OrderedMap, py_min_by};
+use fros_sensor::ordered::{OrderedMap, py_min_by};
 
 pub const MAX_FLOWS: usize = 4096;
 pub const FLOW_TIMEOUT_SECONDS: f64 = 5.0;

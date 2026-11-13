@@ -8,39 +8,55 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub(crate) struct OrderedMap<K, V> {
+#[derive(Debug, Clone)]
+pub struct OrderedMap<K, V> {
     slots: Vec<Option<(K, V)>>,
     index: HashMap<K, usize>,
 }
 
+impl<K: Eq + Hash + Clone, V> Default for OrderedMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             slots: Vec::new(),
             index: HashMap::new(),
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.index.len()
     }
 
-    pub(crate) fn contains_key(&self, key: &K) -> bool {
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    /// The keys in insertion order.
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.iter().map(|(k, _)| k)
+    }
+
+    pub fn contains_key(&self, key: &K) -> bool {
         self.index.contains_key(key)
     }
 
-    pub(crate) fn get(&self, key: &K) -> Option<&V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
         let &i = self.index.get(key)?;
         self.slots.get(i)?.as_ref().map(|(_, v)| v)
     }
 
-    pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         let &i = self.index.get(key)?;
         self.slots.get_mut(i)?.as_mut().map(|(_, v)| v)
     }
 
     /// Like a dict assignment: a key already there keeps its place.
-    pub(crate) fn insert(&mut self, key: K, value: V) {
+    pub fn insert(&mut self, key: K, value: V) {
         if let Some(&i) = self.index.get(&key)
             && let Some(slot) = self.slots.get_mut(i)
         {
@@ -51,7 +67,7 @@ impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
         self.slots.push(Some((key, value)));
     }
 
-    pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
+    pub fn remove(&mut self, key: &K) -> Option<V> {
         let i = self.index.remove(key)?;
         let removed = self.slots.get_mut(i)?.take().map(|(_, v)| v);
         if self.slots.len() > 32 && self.index.len() * 2 < self.slots.len() {
@@ -60,7 +76,7 @@ impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
         removed
     }
 
-    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
+    pub fn retain(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
         let mut dropped = Vec::new();
         for (k, v) in self.iter() {
             if !keep(k, v) {
@@ -82,14 +98,14 @@ impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.slots.iter().flatten().map(|(k, v)| (k, v))
     }
 }
 
 /// Python's `min(d, key=...)` over a dict's items in insertion order:
 /// the first item whose key is `<` every earlier minimum.
-pub(crate) fn py_min_by<'a, K: 'a, V: 'a>(
+pub fn py_min_by<'a, K: 'a, V: 'a>(
     items: impl Iterator<Item = (&'a K, &'a V)>,
     key: impl Fn(&V) -> f64,
 ) -> Option<&'a K> {
@@ -105,7 +121,7 @@ pub(crate) fn py_min_by<'a, K: 'a, V: 'a>(
 }
 
 /// Python's `max(values)`: the first value `>` every earlier maximum.
-pub(crate) fn py_max(values: impl Iterator<Item = f64>) -> Option<f64> {
+pub fn py_max(values: impl Iterator<Item = f64>) -> Option<f64> {
     let mut best: Option<f64> = None;
     for value in values {
         match best {

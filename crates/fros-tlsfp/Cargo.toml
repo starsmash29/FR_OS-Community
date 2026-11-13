@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+fros-sensor = { path = "../fros-sensor" }
 # JA3 is an MD5 and JA4 a truncated SHA-256 by definition; RustCrypto's
 # pure-Rust implementations (MIT OR Apache-2.0), no C, no unsafe of ours.
 md-5 = "0.10"

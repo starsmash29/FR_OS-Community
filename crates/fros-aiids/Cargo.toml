@@ -1,0 +1,18 @@
+[package]
+name = "fros-aiids"
+description = "AI-IDS anomaly scoring (per-host sliding windows and baselines, the DGA heuristic, the log readers), held to FR_OS 1.x's frfw.ai_ids"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+fros-sensor = { path = "../fros-sensor" }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
