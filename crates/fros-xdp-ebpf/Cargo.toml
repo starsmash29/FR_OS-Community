@@ -1,0 +1,32 @@
+[package]
+name = "fros-xdp-ebpf"
+version = "2.0.0-dev"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "FR_OS's XDP SNI filter, the kernel side (aya)"
+publish = false
+
+# Not a member of the root workspace: it builds for bpfel-unknown-none
+# with nightly and bpf-linker (rust-toolchain.toml next to this file),
+# the userland crates on the pinned stable.
+[workspace]
+
+[dependencies]
+aya-ebpf = "=0.3.0"
+
+[[bin]]
+name = "fros-xdp"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+debug = 2
+codegen-units = 1
+lto = true
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

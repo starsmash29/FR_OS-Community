@@ -1,0 +1,20 @@
+[package]
+name = "fros-xdp"
+description = "The XDP SNI filter's userland: the kernel program (crates/fros-xdp-ebpf) held to FR_OS 1.x's bpf/xdp_sni_filter.c"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+# Loads the kernel program and runs it on recorded frames
+# (BPF_PROG_TEST_RUN); pure Rust over the bpf() syscall, no libbpf.
+aya = { version = "=0.14.0", default-features = false }
+fros-sensor = { path = "../fros-sensor" }
+
+[lints]
+workspace = true

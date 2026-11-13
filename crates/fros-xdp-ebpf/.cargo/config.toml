@@ -1,0 +1,10 @@
+[build]
+target = "bpfel-unknown-none"
+
+[unstable]
+build-std = ["core"]
+
+# BTF in the object: the kernel wants func_info for a program that hands
+# bpf_loop a callback, and aya passes it on.
+[target.bpfel-unknown-none]
+rustflags = ["-C", "debuginfo=2", "-C", "link-arg=--btf"]

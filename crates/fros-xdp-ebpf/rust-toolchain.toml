@@ -1,0 +1,7 @@
+# The kernel side builds with nightly Rust (build-std for the BPF
+# target) and bpf-linker, as aya requires (AGENTS.md, "Toolchains").
+# Pinned like the stable toolchain: a nightly is a moving target.
+[toolchain]
+channel = "nightly-2026-11-01"
+components = ["rust-src", "rustfmt", "clippy"]
+profile = "minimal"

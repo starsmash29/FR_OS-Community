@@ -7,7 +7,11 @@ members = [
     "crates/fros-ipc",
     "crates/fros-sensor",
     "crates/fros-tlsfp",
+    "crates/fros-xdp",
 ]
+# Builds for the BPF target with nightly and bpf-linker (its own
+# rust-toolchain.toml).
+exclude = ["crates/fros-xdp-ebpf"]
 
 [workspace.package]
 version = "2.0.0-dev"
