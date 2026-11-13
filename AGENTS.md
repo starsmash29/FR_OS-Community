@@ -86,7 +86,16 @@ seeded traffic of every kind, and records every verdict; and
 MAC addresses, the IEEE registry and the neighbour table in every
 shape, mDNS answers built, damaged and random, devices to score, and
 whole scans with every helper answer, mDNS result and file injected,
-and records the inventory file each scan writes. The Go packages and the Rust
+and records the inventory file each scan writes. One recording needs
+root and runs on its own: `reference/generate-xdp.sh` compiles 1.x's
+XDP program (`bpf/xdp_sni_filter.c`) and has the kernel run it
+(`BPF_PROG_TEST_RUN`) on the frames of `reference/test_fros_xdp_cases.py`
+(ClientHellos for every name shape and field value, cut at every byte,
+behind VLAN tags, IPv4 options and fragments, IPv6 extension headers,
+and split over segments in order, out of order, with bad checksums, past
+every limit of the follower, then damaged at random), recording each
+frame's verdict, the counters it moved, the events and hello copies it
+reported and the flows it left. The Go packages and the Rust
 crates replay those cases:
 
 - the config package must load the same YAML to the same values, write
@@ -112,6 +121,9 @@ crates replay those cases:
 - the IoT crate must read the same vendors and neighbours, find the
   same mDNS service types, score every device the same, ask the
   helpers the same and write the same inventory file, byte for byte.
+- the XDP program must give every frame the same verdict, move the
+  same counters, report the same events and hello copies, and leave
+  the same flow state, in the same maps.
 
 A difference is a bug in 2.x or a decision. A decision gets a line in
 the PR and an entry in `testdata/reference/decisions.md` saying which
@@ -161,7 +173,7 @@ the edge-case inputs) and regenerate.
 
 - Go 1.27 (`go.mod`). `encoding/json/v2` is in the standard library from 1.27 without an experiment flag.
 - Rust stable 1.97 for userland (`rust-toolchain.toml`).
-- The aya eBPF crates build with nightly Rust and `bpf-linker`; how CI installs `bpf-linker` (pinned) is decided with the first eBPF crate.
+- The aya eBPF crates (`crates/*-ebpf`) build with the nightly pinned in their own `rust-toolchain.toml` and `bpf-linker` 0.13.0, built against that nightly's LLVM (`cargo install bpf-linker@0.13.0 --locked --no-default-features --features llvm-23,no-llvm-linking`, linking rustc's `libLLVM` as `.github/workflows/ci.yml` does). They are not workspace members; each has its own `Cargo.lock`.
 
 ## Definition of done
 
@@ -172,6 +184,7 @@ A PR is ready for review when all of the following hold.
   go vet ./... && go test ./...
   cargo fmt --all --check && cargo clippy --all-targets && cargo test
   ```
+  The XDP program, built and replayed as root: `(cd crates/fros-xdp-ebpf && cargo build --release) && CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='sudo -E' FROS_XDP_REQUIRED=1 cargo test -p fros-xdp`.
   Root-only sandbox end to end (Linux, root, nft, ip, unshare): `go test ./webui/ -run TestGoWebUIGoHelperSandbox -v`.
 - **Differential tests** pass, or every difference is a recorded decision.
 - **Boot test**, when the change touches the image, boot, services, networking or the installer: the installer workflow with `boot_test=true` passes. If you can't run it, say so in the PR.
@@ -195,7 +208,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS. The Go webUI is what ships (`systemd/fr-webui.service` runs `/usr/libexec/fr_os/fr-webui` as `fr_os-webui`); FR_OS 1.x is reference only |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
-| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`); `crates/fros-iot` is IoT discovery (MAC vendors from the IEEE registry, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file, read from the sensor's JSON view of the config), held to 1.x's `frfw.iot` (`iot.jsonl`) |
+| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`); `crates/fros-iot` is IoT discovery (MAC vendors from the IEEE registry, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file, read from the sensor's JSON view of the config), held to 1.x's `frfw.iot` (`iot.jsonl`); `crates/fros-xdp-ebpf` is the XDP SNI filter's kernel side in aya (the filter, the split-hello follower and the IPv6 path, with 1.x's maps), held to 1.x's `bpf/xdp_sni_filter.c` frame for frame (`xdp.jsonl`) by `crates/fros-xdp`'s replay |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |

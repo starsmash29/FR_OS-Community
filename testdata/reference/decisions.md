@@ -486,3 +486,49 @@ The helper calls (`dhcp_leases`, `iot_sync_isolation`), the mDNS
 socket (`discover`), writing the inventory file and what the daemon
 does when a scan hits an exception 1.x doesn't catch (recorded here by
 name, as `Crash`) come with the daemon (phase 4e).
+
+## 2026-11-13: the XDP program's kernel side (phase 4d-1)
+
+`crates/fros-xdp-ebpf` is 1.x's `bpf/xdp_sni_filter.c` in Rust (aya):
+the filter (`xdp_sni_filter`), the split-hello follower
+(`xdp_sni_split`) and the IPv6 path (`xdp_sni_filter6`), reached
+through `split_prog` as in 1.x, with 1.x's maps: the same names, types,
+key and value sizes, layouts and stat indices. `crates/fros-xdp`'s
+replay loads it and has the kernel run it on every frame of xdp.jsonl
+(`reference/test_fros_xdp_cases.py`, recorded by
+`reference/generate-xdp.sh` from 1.x's C program at PIN): each frame's
+verdict, the counters it moved, the events and hello copies it
+reported (every field the C program sets) and the flows left in
+`sni_flows` and `hello_flows`. No case differs; `DECIDED` is empty.
+
+How the program reads differs, not what it answers:
+
+- **Past the TCP header, the packet is read with `bpf_xdp_load_bytes`**
+  into per-CPU scratch space and parsed there at masked offsets; 1.x
+  read the ClientHello through packet pointers. A read fails where the
+  frame ends either way (the program isn't a frags one: the frame is
+  one buffer), so the frame and datagram bounds (SEC-7, SEC-20) fall in
+  the same places. The first segment's copy is 16 KiB, more than any
+  read of the parse can reach.
+- **The first segment's extension walk and the name's normalization
+  run as `bpf_loop` callbacks**, as 1.x's follower walk already did.
+  BPF has no conditional move: unrolled, each byte's condition doubles
+  the paths the verifier walks, and the program ran out of its
+  1,000,000-instruction budget. Kernel needs are unchanged: 1.x already
+  required `bpf_loop` (5.17) and `bpf_xdp_load_bytes` (5.18);
+  `bpf_xdp_get_buff_len` is 5.18 too.
+
+Not reached by the recording, checked by reading against the C instead:
+the clamp of a declared extensions length at 4095 bytes (it needs more
+than 4 KiB of extensions in one frame, a jumbo frame;
+`BPF_PROG_TEST_RUN` takes at most a page), and the pass events' backlog
+cap (128 KiB of unread events; the replay reads them after each frame).
+
+The recording was checked by breaking the port on purpose: some 60 changes,
+each a boundary moved by one, a check dropped or a field written wrong;
+every one that changes an answer fails the replay. Those that slipped
+through the first corpus (the follower's segment limit, a handshake
+across records, sequence numbers wrapping, the extensions length
+against what follows it, a cipher list of 513 bytes, a fragment header
+after a fragment header) got cases. The loader (pinning, attaching,
+GRO, the blocklist sync, reading the events) comes in phase 4d-2.

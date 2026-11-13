@@ -44,3 +44,37 @@ jobs:
         run: |
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
+
+  # The XDP program (crates/fros-xdp-ebpf): built with its pinned nightly
+  # and bpf-linker, then replayed against FR_OS 1.x's recording as root
+  # (BPF_PROG_TEST_RUN needs CAP_BPF and CAP_NET_ADMIN).
+  xdp:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchains from rust-toolchain.toml (stable, and the eBPF crate's nightly)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cd crates/fros-xdp-ebpf && (rustup show active-toolchain || rustup toolchain install)
+      - name: bpf-linker 0.13.0, against the pinned nightly's LLVM
+        run: |
+          lib=$(cd crates/fros-xdp-ebpf && rustc --print sysroot)/lib
+          llvm=$(basename "$(ls "$lib"/libLLVM*.so)" .so)
+          RUSTFLAGS="-L $lib -l dylib=${llvm#lib} -C link-arg=-Wl,-rpath,$lib" \
+            cargo install bpf-linker --version 0.13.0 --locked --no-default-features --features llvm-23,no-llvm-linking
+      - name: fmt and clippy (kernel side)
+        working-directory: crates/fros-xdp-ebpf
+        run: cargo fmt --check && cargo clippy --release --locked
+      - name: build the kernel program
+        working-directory: crates/fros-xdp-ebpf
+        run: cargo build --release --locked
+      - name: replay 1.x's recorded frames
+        env:
+          FROS_XDP_REQUIRED: "1"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo -E
+        run: cargo test --locked -p fros-xdp
+      - name: cargo audit (kernel side)
+        working-directory: crates/fros-xdp-ebpf
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
