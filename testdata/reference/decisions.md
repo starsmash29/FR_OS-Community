@@ -135,13 +135,6 @@ replays them.
   `config.LoadYAML` (config/flowyaml_test.go checks every value the
   recording loaded), and porting the block emitter would be a second
   YAML implementation to keep right.
-- **The XDP SNI filter** is not in FR_OS 2 yet (phase 4, Rust/aya): an
-  apply of a config with `xdp_sni_filter.enabled`, or while a filter is
-  attached, is refused at its preflight, before anything changes, where
-  1.x loads it. Cases: sessions whose config enables the filter (marked
-  `decided` when the recording has one). Why: an apply that said it had
-  loaded a filter it can't load would be a lie; refusing changes
-  nothing.
 - **The schedule record's fingerprint** (`schedule_state.json`,
   `config_fingerprint`) is the SHA-256 of the parsed config as
   deterministic JSON, where 1.x hashes Python's `repr` of it. Cases:
@@ -532,3 +525,52 @@ across records, sequence numbers wrapping, the extensions length
 against what follows it, a cipher list of 513 bytes, a fragment header
 after a fragment header) got cases. The loader (pinning, attaching,
 GRO, the blocklist sync, reading the events) comes in phase 4d-2.
+
+## 2026-11-13: the XDP filter's loader and its apply (phase 4d-2)
+
+An apply now turns the XDP SNI filter on, keeps it, replaces it and
+turns it off as 1.x's `frfw.xdp.sync_sni_filter` does: the same state
+file (`xdp_state.json`), the same attach order (native, then generic),
+GRO off where it runs in generic mode and back on where FR_OS turned it
+off, the blocklist synced before any attach, the switches, the readers
+restarted, and the same undo. The apply cases record it (the "xdp" and
+"xdp_failure" sessions of `reference/test_fros_apply_cases.py`); the
+decision that refused every such apply is gone, and the sessions that
+had it now replay in full. What the userland reads from the program
+(the event and hello-copy records, the event logger's line and its
+file) is recorded in xdpuser.jsonl (`reference/test_fros_xdpuser_cases.py`)
+and replayed by `crates/fros-xdp/tests/xdpuser.rs`; the blocklist keys
+of the same file by `apply/reference_xdp_keys_test.go`.
+
+- **bpftool is `fr-xdp`** (`crates/fros-xdp`, `/usr/libexec/fr_os/fr-xdp`):
+  bpftool loads through libbpf, which no longer reads the legacy `maps`
+  section aya's maps are declared in, and decodes map dumps only through
+  BTF the aya maps don't carry. The replay holds the apply to the
+  recording through one translation of the calls, written out in
+  `apply/reference_xdp_test.go`: `prog loadall ... pinmaps` is
+  `fr-xdp load`, `-j prog show pinned` is `fr-xdp prog-id` (the same
+  JSON), the settings update is `fr-xdp settings` with the bits in
+  decimal, the stats dump is `fr-xdp stats` (the same JSON), and the
+  blocklist's dump with its deletes and updates is one `fr-xdp
+  blocklist` call whose input is every key wanted, one hex line each.
+  Its failures carry 1.x's messages (`Dumping ... failed:`, `Deleting
+  from ... failed:`, `Updating ... failed:`). 1.x's message for a
+  missing bpftool is FR_OS 2's for a missing fr-xdp (it ships with
+  FR_OS, so a missing one is an incomplete installation). Cases: the
+  xdp sessions that run bpftool, and `xdp/no bpftool`.
+- **GRO is read and set with the SIOCETHTOOL ioctl in Go**
+  (`apply/gro_linux.go`), as 1.x does from Python; the recording
+  represents each ioctl as a call `["ioctl", "SIOCETHTOOL", device,
+  command(, value)]` (rc the errno), which the replay's GRO hooks make.
+  No case differs.
+- **Attaching and detaching stay `ip link set dev X xdpdrv|xdpgeneric
+  pinned P`**, as in 1.x: iproute2 attaches a program aya pinned
+  (`apply/xdp_root_test.go` does it on a veth, as root). No case
+  differs.
+- **The blocklist keys are built in Go** (`apply.LPMKey`), as 1.x builds
+  them in the apply, so a name the kernel map can't hold is refused
+  with 1.x's message at the preflight, before anything changes. No case
+  differs.
+- **Not yet:** the event logger daemon (who owns the event file, and
+  dropping its privileges) comes with the daemons in phase 4e;
+  `crates/fros-xdp`'s `events` module is what it will write with.

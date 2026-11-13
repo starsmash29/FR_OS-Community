@@ -416,8 +416,8 @@ var XdpStatNames = []string{"pass_not_tls", "pass_truncated", "pass_no_sni", "pa
 	"drop_reordered", "drop_bad_checksum", "drop_unfollowed", "drop_fragment", "drop_ipv6_headers"}
 
 // cmdXdpStats is the filter's packet counters: all zero while it was
-// never loaded. The filter itself isn't in FR_OS 2 yet (phase 4); a
-// router that runs 1.x's still shows its counters here.
+// never loaded. fr-xdp reads the pinned map (where 1.x ran bpftool, whose
+// dump of an array map was this same JSON).
 func (s *Server) cmdXdpStats() (any, error) {
 	counts := config.NewMap()
 	for _, name := range XdpStatNames {
@@ -436,12 +436,10 @@ func (s *Server) cmdXdpStats() (any, error) {
 	if !pinned {
 		return pyReply(m)
 	}
-	// No -j: bpftool's plain dump of an array map is already JSON
-	// (frfw.xdp._dump_lpm_keys).
-	res, err := s.sys().Run(apply.Cmd{Argv: []string{"bpftool", "map", "dump", "pinned", path}})
+	res, err := s.sys().Run(apply.Cmd{Argv: []string{apply.XdpTool, "stats", "--", path}})
 	switch {
 	case errors.Is(err, apply.ErrNotFound):
-		return message(false, "'bpftool' not found; install the linux-tools package matching this kernel"), nil
+		return message(false, "'"+apply.XdpTool+"' not found; this FR_OS installation is incomplete"), nil
 	case err != nil:
 		return failed(err)
 	}

@@ -360,3 +360,30 @@ type QRCase struct {
 
 // QRCases are qr.jsonl's cases.
 func QRCases() ([]QRCase, error) { return load[QRCase]("qr.jsonl") }
+
+// XdpUserCase is one answer of 1.x's `frfw.xdp` userland
+// (reference/test_fros_xdpuser_cases.py). The Go apply replays the
+// "key" cases (a blocklist name, its normalized form and its LPM key,
+// hex, or the error); crates/fros-xdp the rest.
+type XdpUserCase struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Normalized string `json:"normalized"`
+	Key        string `json:"key"`
+	Error      string `json:"error"`
+	// The other kinds' fields, unread here.
+	Raw      jsontext.Value `json:"raw"`
+	Event    jsontext.Value `json:"event"`
+	Hello    jsontext.Value `json:"hello"`
+	Ts       jsontext.Value `json:"ts"`
+	Line     jsontext.Value `json:"line"`
+	Initial  jsontext.Value `json:"initial"`
+	MaxBytes jsontext.Value `json:"max_bytes"`
+	Lines    jsontext.Value `json:"lines"`
+	Content  jsontext.Value `json:"content"`
+	Mode     jsontext.Value `json:"mode"`
+}
+
+// XdpUserCases loads testdata/reference/xdpuser.jsonl.
+func XdpUserCases() ([]XdpUserCase, error) { return load[XdpUserCase]("xdpuser.jsonl") }

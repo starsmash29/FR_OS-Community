@@ -456,10 +456,6 @@ func (s *System) syncResolver(c *config.Config, dryRun bool) (string, error) {
 
 // --- the XDP SNI filter (frfw.xdp) ------------------------------------------------
 
-// MaxSNILen is the kernel filter's bound (bpf/xdp_sni_filter.c): a name
-// this long or longer never matches there.
-const MaxSNILen = 32
-
 // criticalDomains are up to limit domains of the downloaded blocklist,
 // sorted, short enough for the kernel filter.
 func criticalDomains(path string, limit int64) ([]string, error) {
@@ -493,36 +489,6 @@ func criticalDomains(path string, limit int64) ([]string, error) {
 	return domains, nil
 }
 
-// xdpTooLong are the names the XDP blocklist would get from the
-// ad-block list and app control that are too long for the kernel
-// filter (frfw.provision.xdp_config_for): an apply names them (ROADMAP
-// SEC-17), whether or not the filter is on.
-func (s *System) xdpTooLong(c *config.Config) ([]string, error) {
-	extra := map[string]bool{}
-	if c.Adblocker.Enabled && c.Adblocker.XdpCriticalLimit > 0 {
-		names, err := criticalDomains(s.Paths.AdblockHosts, c.Adblocker.XdpCriticalLimit)
-		if err != nil {
-			return nil, err
-		}
-		for _, n := range names {
-			extra[n] = true
-		}
-	}
-	if c.AppControl.BlockViaXdp {
-		for _, n := range render.BlockedAppNames(c, s.Catalog) {
-			extra[n] = true
-		}
-	}
-	var long []string
-	for n := range extra {
-		if len([]rune(n)) >= MaxSNILen {
-			long = append(long, n)
-		}
-	}
-	slices.Sort(long)
-	return long, nil
-}
-
 // sampleNames is up to five names for a message, and how many weren't
 // shown.
 func sampleNames(names []string) string {
@@ -539,45 +505,4 @@ func sampleNames(names []string) string {
 		text += ", ... (" + strconv.Itoa(len(ordered)-5) + " more not shown)"
 	}
 	return text
-}
-
-// errXDPNotPorted: the XDP SNI filter's loader is phase 4 of FR_OS 2
-// (Rust, aya). Until then an apply that needs it changes nothing
-// (testdata/reference/decisions.md, "The XDP SNI filter").
-var errXDPNotPorted = &StepError{"the XDP SNI filter is not in FR_OS 2 yet (its loader comes with phase 4); " +
-	"turn xdp_sni_filter off, or apply with FR_OS 1.x"}
-
-// xdpAttached are the devices the state file says the filter was
-// attached to by FR_OS 1.x.
-func (s *System) xdpAttached() []string {
-	text, ok := readText(s.Paths.XdpState)
-	if !ok {
-		return nil
-	}
-	v, err := config.ParseJSONLastWins([]byte(text))
-	m, isMap := v.(*config.Map)
-	if err != nil || !isMap {
-		return nil
-	}
-	a, _ := m.Get("attached")
-	attached, _ := a.(*config.Map)
-	if attached == nil {
-		return nil
-	}
-	var out []string
-	for _, k := range attached.Keys() {
-		if name, ok := k.(string); ok {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// syncXDP is the XDP step: with the filter off and nothing attached,
-// nothing to do; anything else needs the loader that isn't here yet.
-func (s *System) syncXDP(c *config.Config) (string, error) {
-	if c.XdpSniFilter.Enabled || len(s.xdpAttached()) > 0 {
-		return "", errXDPNotPorted
-	}
-	return "XDP SNI filter disabled; nothing to do", nil
 }
