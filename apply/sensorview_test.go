@@ -30,7 +30,10 @@ tls_fingerprint:
     - t13d1516h2_8daaf6152771_02713d6af862
 `,
 			`{"tls_fingerprint": {"enabled": true, "blocklist": [{"fingerprint": "0123456789abcdef0123456789abcdef", "label": "bot"}, ` +
-				`{"fingerprint": "t13d1516h2_8daaf6152771_02713d6af862", "label": ""}], "quarantine_on_match": true, "quarantine_duration_seconds": 600}}` + "\n",
+				`{"fingerprint": "t13d1516h2_8daaf6152771_02713d6af862", "label": ""}], "quarantine_on_match": true, "quarantine_duration_seconds": 600}, ` +
+				`"app_control": {"sources": []}, "ai_ids": {"enabled": false, "excluded_macs": [], "excluded_ips": [], ` +
+				`"internal_networks": ["192.168.7.0/24"], "infrastructure": ["192.168.7.1"], "threat_categories": [], ` +
+				`"query_log": false, "quarantine_duration_seconds": 600}}` + "\n",
 		},
 		{
 			"defaults",
@@ -40,7 +43,10 @@ interfaces:
   wan: {device: eth0, zone: wan}
 zones: {wan: {}}
 `,
-			`{"tls_fingerprint": {"enabled": false, "blocklist": [], "quarantine_on_match": false, "quarantine_duration_seconds": 7200}}` + "\n",
+			`{"tls_fingerprint": {"enabled": false, "blocklist": [], "quarantine_on_match": false, "quarantine_duration_seconds": 7200}, ` +
+				`"app_control": {"sources": []}, "ai_ids": {"enabled": false, "excluded_macs": [], "excluded_ips": [], ` +
+				`"internal_networks": [], "infrastructure": [], "threat_categories": [], "query_log": false, ` +
+				`"quarantine_duration_seconds": 7200}}` + "\n",
 		},
 		{
 			"refused",

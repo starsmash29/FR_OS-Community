@@ -439,11 +439,11 @@ Where 1.x's usage restore raises an exception it doesn't catch (an int
 too large for a float, an infinite hit count), `UsageTracker::restore`
 returns that exception's name, as recorded (these cases pass); what
 the daemon does then (1.x's dies at start) is decided with the daemon
-(phase 4e), as for the TLS inventory.
+(phase 4e-2, below), as for the TLS inventory.
 
 Which sources the AI-IDS daemon scores (internal networks, IPv6 hosts
-by MAC), its conntrack sampling and its quarantine come with the daemon
-(phase 4e); the line readers here only parse, and the case file records
+by MAC), its conntrack sampling and its quarantine came with the daemon
+(phase 4e-2, below); the line readers here only parse, and the case file records
 them with every source passed through.
 
 ## 2026-11-13: IoT discovery (phase 4c)
@@ -622,3 +622,76 @@ replays it: the same requests, counts and state files, byte for byte.
   `apply/xdp_root_test.go`'s `TestXdpReadersRealAttach` runs both on a
   real attach, as root: the drop is logged to the root-owned event file,
   the hello fingerprinted with 1.x's JA4 and JA3, and neither keeps root.
+
+## 2026-11-14: the application identification and AI-IDS daemons (phase 4e-2)
+
+`fr-appid` and `fr-ai-ids` are 1.x's `frfw.appid.daemon` and
+`frfw.ai_ids.daemon`, in Rust. `testdata/reference/sensord.jsonl`
+(`reference/test_fros_sensord_cases.py`) records what each takes from a
+config (op `view`), 1.x's appid daemon started on a usage file and fed
+log lines at given clocks (op `appid`), and 1.x's AI-IDS daemon fed log
+lines, conntrack samples and evaluations at given clocks, asking a fake
+apply-helper on a Unix socket that answers given bytes (op `aiids`).
+`apply/reference_sensorview_test.go`, `crates/fros-appid/tests/daemon.rs`
+and `crates/fros-aiids/tests/daemon.rs` replay it: the same view, the
+same usage files, requests, printed lines, flagged events and event
+logs, byte for byte. The `tests/e2e.rs` of both crates run the real
+binaries on real files and, for fr-ai-ids, a real Unix socket.
+
+- **The sensors' view gains `app_control` and `ai_ids`.** `app_control`
+  is the sources fr-appid follows (1.x's `source_units`: "dns" with
+  app control, ad-block DNS and its query log on; "sni" with the XDP
+  filter and `observe_sni` on). `ai_ids` is the switch, the excluded
+  MACs (lowercase) and the reservation addresses they resolve to
+  (`resolve_excluded_ips`), the networks scored (`internal_networks`),
+  the configured addresses never quarantined (`infrastructure_ips`
+  without the routing table and resolv.conf, which the daemon reads at
+  each evaluation, as 1.x), the threat categories whose answers count,
+  whether the resolver writes its query log, and the quarantine time.
+  Every recorded view matches.
+- **The log files are followed natively, not with `tail -n 0 -F`**
+  (`fros_sensor::follow`): new lines only, a file missing at start read
+  from its start once it appears, an emptied or replaced file read
+  again from its start, polled from the daemon's own loop. A line
+  longer than 64 KiB is dropped whole, at most 1 MiB is read per poll
+  (AGENTS.md: every read has a limit; `tail` has none), and bytes that
+  aren't UTF-8 read as U+FFFD, where 1.x's reader thread dies on them
+  and the daemon reads that log no more until it restarts.
+- **A usage file 1.x dies on at start is put aside, and fr-appid starts
+  afresh**, as the TLS inventory (phase 4e-1): one that isn't UTF-8,
+  nests too deep or holds counts 1.x's restore raises on, and one past
+  16 MiB, unread. A file that isn't JSON or holds no usage starts empty,
+  as in 1.x. The cases 1.x dies on (`crash` at the case) are replayed
+  with the steps of 1.x started without the file
+  (`oversized_usage_put_aside` checks the size cap). A usage file that
+  can't be written is logged and tried again at the next flush.
+- **fr-ai-ids reads the view again at every window, and starts over as a
+  new process when its part changed** (owner's go-ahead on the plan).
+  1.x reads its config once, at start, and the webUI tells the
+  administrator to restart the service. Started with `ai_ids.enabled`
+  off it exits, as 1.x does; turned off while running, it starts over
+  and so exits. A missing view, or one written from a refused config,
+  keeps the settings it has. fr-appid starts over when its sources
+  change, as 1.x re-executes itself.
+- **Where 1.x dies on what the apply-helper answers, fr-ai-ids logs it
+  and goes on**: a reply that isn't an object (to a sample or a
+  quarantine: `AttributeError`), flows that are a number, a bool or
+  null (`TypeError`), a flow whose fields are lists or objects (Python
+  can't hash the key; that flow is skipped), and a reply 1.x's client
+  lets an exception through for (`HelperError::Raised`). Cases:
+  "conntrack flows a number", "conntrack reply a list", "helper reply
+  not an object" (`crash` at the step): the recorded requests and lines
+  are a prefix of what FR_OS 2 sends and prints, and the replay stops
+  there.
+- **An event log 1.x can't read is read as empty**: one that isn't
+  UTF-8 (1.x dies, `UnicodeDecodeError`), nests too deep, or is past 1
+  MiB (1.x writes at most 50 events). The new event is then all it
+  holds. Case: "event log not utf-8" (`crash` at the step);
+  `event_log_not_utf8_starts_afresh`. An event log that can't be written
+  is logged; the quarantine stands.
+- **A lone surrogate in the event log is written back as U+FFFD**, as
+  everywhere in FR_OS 2. Case: "event log odd values".
+- **The routing table and resolv.conf are read up to 1 MiB, bytes that
+  aren't UTF-8 as U+FFFD**; a default route whose gateway `int(x, 16)`
+  reads as negative or past 32 bits is skipped, where 1.x dies
+  (`OverflowError` from `to_bytes`). The kernel writes neither.

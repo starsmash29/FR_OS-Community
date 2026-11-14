@@ -10,13 +10,13 @@
 //! the Go apply writes (`apply.SensorView`), never from the YAML copy.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::{self, Read as _};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use fros_sensor::helper::HelperError;
 use fros_sensor::pyjson::{self, Dict, LoadError, Value};
 use fros_sensor::pytext::str_of;
+use fros_sensor::statefile::{put_aside, read_limited, universal_newlines, write_atomic};
 
 use crate::inventory::FingerprintInventory;
 use crate::reassembly::Reassembler;
@@ -271,48 +271,7 @@ impl Daemon {
 /// Writes `text` to `path` through `path` with the extension `.tmp`
 /// (1.x's `with_suffix(".tmp")`), creating the directory.
 pub fn write_state(path: &Path, text: &str) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, text)?;
-    fs::rename(&tmp, path)
-}
-
-/// The file's bytes, `None` when it doesn't exist, an error past `max`.
-fn read_limited(path: &Path, max: u64) -> io::Result<Option<Vec<u8>>> {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let mut raw = Vec::new();
-    file.take(max + 1).read_to_end(&mut raw)?;
-    if raw.len() as u64 > max {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("larger than {max} bytes"),
-        ));
-    }
-    Ok(Some(raw))
-}
-
-/// 1.x's `read_text()`: text mode turns "\r\n" and "\r" into "\n".
-fn universal_newlines(raw: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(raw.len());
-    let mut i = 0;
-    while i < raw.len() {
-        if raw[i] == b'\r' {
-            out.push(b'\n');
-            if raw.get(i + 1) == Some(&b'\n') {
-                i += 1;
-            }
-        } else {
-            out.push(raw[i]);
-        }
-        i += 1;
-    }
-    out
+    write_atomic(path, text)
 }
 
 /// What starting on the state file found.
@@ -350,19 +309,9 @@ pub fn restore_state(path: &Path, now: f64) -> Restored {
             Err(LoadError::Crash(name)) => format!("unreadable ({name})"),
         },
     };
-    let mut aside = path.as_os_str().to_owned();
-    aside.push(".broken");
-    let aside = PathBuf::from(aside);
-    let broken = match fs::rename(path, &aside) {
-        Ok(()) => Some((aside, why)),
-        Err(e) => Some((
-            path.to_path_buf(),
-            format!("{why}; could not put it aside: {e}"),
-        )),
-    };
     Restored {
         inventory: FingerprintInventory::new(now),
-        broken,
+        broken: Some(put_aside(path, why)),
     }
 }
 

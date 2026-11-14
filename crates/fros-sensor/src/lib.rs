@@ -16,10 +16,13 @@
 //! - [`reference`]: reading the recorded 1.x cases in the tests.
 
 pub mod dnsmasq;
+pub mod follow;
 pub mod helper;
 pub mod ordered;
+pub mod pyaddr;
 pub mod pyfloat;
 pub mod pyjson;
 pub mod pytext;
 pub mod reference;
+pub mod statefile;
 mod unicode_tables;

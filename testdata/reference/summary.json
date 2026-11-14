@@ -8,6 +8,7 @@
   "qr": 28,
   "render": 1674,
   "ruleset": 2226,
+  "sensord": 56,
   "skipped": {
     "config_not_json": 13,
     "ruleset_not_json": 0,

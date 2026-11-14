@@ -176,6 +176,49 @@ pub fn type_name(value: &Value) -> &'static str {
     }
 }
 
+/// `str.splitlines()`: lines end at \n, \r, \r\n, \v, \f, \x1c-\x1e,
+/// \x85, U+2028 and U+2029, and a final terminator adds no empty line.
+pub fn splitlines(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let breaks = matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        );
+        if !breaks {
+            continue;
+        }
+        out.push(&text[start..i]);
+        let mut next = i + c.len_utf8();
+        if c == '\r'
+            && let Some(&(j, '\n')) = chars.peek()
+        {
+            chars.next();
+            next = j + 1;
+        }
+        start = next;
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
+}
+
+/// `str.split()` with no argument: runs of whitespace separate fields.
+pub fn split_fields(text: &str) -> Vec<&str> {
+    text.split(is_space).filter(|f| !f.is_empty()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +233,10 @@ mod tests {
         );
         assert!(is_space('\x1c') && !is_space('\u{200b}'));
         assert!(is_decimal('\u{661}') && !is_decimal('\u{b2}'));
+        assert_eq!(
+            splitlines("a\r\nb\rc\x1cd\n\ne\n"),
+            ["a", "b", "c", "d", "", "e"]
+        );
+        assert_eq!(split_fields(" a \t b\x1fc "), ["a", "b", "c"]);
     }
 }

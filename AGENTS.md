@@ -90,11 +90,18 @@ and records the inventory file each scan writes;
 `reference/test_fros_xdpuser_cases.py`, which feeds 1.x's XDP userland
 blocklist names, the filter's event and hello-copy records whole, cut
 and random, and lines for its event file, and records each key, decoded
-record, JSON line and file; and `reference/test_fros_tlsfpd_cases.py`,
+record, JSON line and file; `reference/test_fros_tlsfpd_cases.py`,
 which runs 1.x's TLS fingerprinting daemon on hello copies at given
 clocks, with state files valid and broken and a fake apply-helper
 answering every shape of reply, and its helper client alone, and
-records each request, count, state file and reply. One recording needs
+records each request, count, state file and reply; and
+`reference/test_fros_sensord_cases.py`, which records what 1.x's
+application identification and AI-IDS daemons take from each config,
+and runs them on log lines, conntrack samples and evaluations at given
+clocks, with usage files and event logs valid and broken, a routing
+table and resolv.conf, and a fake apply-helper answering every shape
+of reply, and records each request, printed line, flagged event, usage
+file and event log. One recording needs
 root and runs on its own: `reference/generate-xdp.sh` compiles 1.x's
 XDP program (`bpf/xdp_sni_filter.c`) and has the kernel run it
 (`BPF_PROG_TEST_RUN`) on the frames of `reference/test_fros_xdp_cases.py`
@@ -124,9 +131,12 @@ crates replay those cases:
   daemon must ask the apply-helper the same and count the same;
 - the application identification crate must parse the same catalog
   (or give the same error text), attribute every name to the same app,
-  and write the same usage state file, byte for byte;
+  and write the same usage state file, byte for byte, and its daemon
+  must follow the same sources and write the same usage file;
 - the AI-IDS crate must give the same DGA verdict and flag the same
-  hosts with the same score, to the last bit of every float;
+  hosts with the same score, to the last bit of every float, and its
+  daemon must score the same sources, ask the apply-helper the same,
+  print the same and write the same event log;
 - the IoT crate must read the same vendors and neighbours, find the
   same mDNS service types, score every device the same, ask the
   helpers the same and write the same inventory file, byte for byte.
@@ -217,7 +227,7 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS. The Go webUI is what ships (`systemd/fr-webui.service` runs `/usr/libexec/fr_os/fr-webui` as `fr_os-webui`); FR_OS 1.x is reference only |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
-| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`), and `fr-tls-fp`, its daemon, held to 1.x's `frfw.tlsfp.daemon` (`tlsfpd.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`); `crates/fros-iot` is IoT discovery (MAC vendors from the IEEE registry, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file, read from the sensor's JSON view of the config), held to 1.x's `frfw.iot` (`iot.jsonl`); `crates/fros-xdp-ebpf` is the XDP SNI filter's kernel side in aya (the filter, the split-hello follower and the IPv6 path, with 1.x's maps), held to 1.x's `bpf/xdp_sni_filter.c` frame for frame (`xdp.jsonl`) by `crates/fros-xdp`'s replay; `crates/fros-xdp` is its userland: `fr-xdp`, which loads and pins it, gives the pinned program's id, syncs the blocklist and writes the switches and reads the counters for the Go apply (fixed argv, absolute paths after `--`), and the event and hello-copy records and the event file, held to 1.x's `frfw.xdp` (`xdpuser.jsonl`), the ring buffer reader and the privilege drop the readers share, and `fr-xdp-sni-logger`, which writes the filter's events to the event file; `crates/fros-sensor`'s `helper` is 1.x's apply-helper client |
+| `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`), and `fr-tls-fp`, its daemon, held to 1.x's `frfw.tlsfp.daemon` (`tlsfpd.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`), and `fr-appid`, its daemon, held to 1.x's `frfw.appid.daemon` (`sensord.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`), and `fr-ai-ids`, its daemon (the sources it scores, conntrack samples and quarantines through the apply-helper, its event log), held to 1.x's `frfw.ai_ids.daemon` (`sensord.jsonl`); `crates/fros-sensor`'s `follow` follows a log file as `tail -n 0 -F` does, for both; `crates/fros-iot` is IoT discovery (MAC vendors from the IEEE registry, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file, read from the sensor's JSON view of the config), held to 1.x's `frfw.iot` (`iot.jsonl`); `crates/fros-xdp-ebpf` is the XDP SNI filter's kernel side in aya (the filter, the split-hello follower and the IPv6 path, with 1.x's maps), held to 1.x's `bpf/xdp_sni_filter.c` frame for frame (`xdp.jsonl`) by `crates/fros-xdp`'s replay; `crates/fros-xdp` is its userland: `fr-xdp`, which loads and pins it, gives the pinned program's id, syncs the blocklist and writes the switches and reads the counters for the Go apply (fixed argv, absolute paths after `--`), and the event and hello-copy records and the event file, held to 1.x's `frfw.xdp` (`xdpuser.jsonl`), the ring buffer reader and the privilege drop the readers share, and `fr-xdp-sni-logger`, which writes the filter's events to the event file; `crates/fros-sensor`'s `helper` is 1.x's apply-helper client |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |
