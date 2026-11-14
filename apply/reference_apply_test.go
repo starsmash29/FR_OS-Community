@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -60,6 +61,10 @@ type fakeSystem struct {
 	random    []byte
 	calls     []call
 	tmpName   *regexp.Regexp
+	// persistName is the persistence filesystem's temporary mount point.
+	persistName *regexp.Regexp
+	// passwords answer the step's password prompts, in order.
+	passwords []string
 	passed    map[int]int
 	// xdp answers the step's fr-xdp calls, in order (reference_xdp_test.go).
 	xdp []xdpAnswer
@@ -133,6 +138,7 @@ type call struct {
 // norm is s as the recording writes it.
 func (f *fakeSystem) norm(s string) string {
 	s = strings.ReplaceAll(s, f.root, "@ROOT@")
+	s = f.persistName.ReplaceAllString(s, "@TMP@/fros-persistence-*")
 	s = f.tmpName.ReplaceAllString(s, "@TMP@/tmp*")
 	return strings.ReplaceAll(s, f.tmp+"/", "@TMP@/")
 }
@@ -219,9 +225,14 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A temporary directory of the case's own: what an apply leaves
+	// there (a persistence mount point the fake's mount never mounted)
+	// goes with it.
+	t.Setenv("TMPDIR", t.TempDir())
 	tmp := filepath.Clean(os.TempDir())
 	f := &fakeSystem{root: root, tmp: tmp, table: c.Table, random: random, passed: map[int]int{},
-		tmpName: regexp.MustCompile(regexp.QuoteMeta(tmp) + `/tmp[A-Za-z0-9_]+`)}
+		tmpName:     regexp.MustCompile(regexp.QuoteMeta(tmp) + `/tmp[A-Za-z0-9_]+`),
+		persistName: regexp.MustCompile(regexp.QuoteMeta(tmp) + `/fros-persistence-[A-Za-z0-9_]+`)}
 	if c.Accounts != nil {
 		f.accounts = &reference.ApplyAccounts{Users: maps.Clone(c.Accounts.Users), Groups: map[string]*reference.ApplyGroup{}}
 		for name, g := range c.Accounts.Groups {
@@ -253,6 +264,26 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	sys.User = f.user
 	sys.Group = f.group
 	sys.Fetch = func(url string) ([]byte, error) { return fetchAnswer(c.Fetch, url) }
+	// The DHCP probe is the recording's pseudo-call ["dhcp-offer", device]:
+	// its output is the network offered, none when nothing answered.
+	// The ports are asked at once (as 1.x's thread pool; the recording
+	// asked them in order): checkCalls compares a run of probes as a set.
+	var probing sync.Mutex
+	sys.ProbeDHCP = func(device string) (string, bool) {
+		probing.Lock()
+		defer probing.Unlock()
+		r, err := f.run(apply.Cmd{Argv: []string{"dhcp-offer", device}})
+		network := strings.TrimSpace(r.Stdout)
+		return network, err == nil && r.Code == 0 && network != ""
+	}
+	sys.Getpass = func(string) (string, error) {
+		if len(f.passwords) == 0 {
+			return "", apply.ErrNoInput
+		}
+		p := f.passwords[0]
+		f.passwords = f.passwords[1:]
+		return p, nil
+	}
 	p := sys.Paths
 	s := &helper.Server{Env: helper.Env{
 		ConfigPath: p.Config, BackupDir: p.BackupDir, KeaConfigPath: p.KeaConfig,
@@ -281,7 +312,8 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 				got = map[string]any{"messages": messages}
 			}
 			sys.Now = func() time.Time { return now }
-		} else if argv, ok := cliOf(t, step.Request); ok {
+		} else if argv, passwords, ok := cliOf(t, step.Request); ok {
+			f.passwords = passwords
 			// firewall-cli: its exit status and what it printed.
 			for i := range argv {
 				argv[i] = strings.ReplaceAll(argv[i], "@ROOT@", root)
@@ -340,21 +372,26 @@ func samePythonJSONError(got, want string) bool {
 	return m != nil && !gok && !wok && strings.HasPrefix(gm, m[1])
 }
 
-// cliOf is a firewall-cli step's argv.
-func cliOf(t *testing.T, request jsontext.Value) ([]string, bool) {
+// cliOf is a firewall-cli step's argv, and the answers its password
+// prompts get.
+func cliOf(t *testing.T, request jsontext.Value) ([]string, []string, bool) {
 	var r map[string]any
 	if err := json.Unmarshal(request, &r); err != nil {
 		t.Fatal(err)
 	}
 	list, ok := r["cli"].([]any)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
-	argv := make([]string, len(list))
-	for i, a := range list {
-		argv[i] = a.(string)
+	strs := func(list []any) []string {
+		out := make([]string, len(list))
+		for i, a := range list {
+			out[i] = a.(string)
+		}
+		return out
 	}
-	return argv, true
+	passwords, _ := r["passwords"].([]any)
+	return strs(list), strs(passwords), true
 }
 
 // cliReply is what a firewall-cli step recorded.
@@ -439,6 +476,8 @@ func sameJSON(t *testing.T, a, b string) bool {
 
 func checkCalls(t *testing.T, where string, got []call, want []reference.ApplyCall) {
 	t.Helper()
+	got = slices.Clone(got)
+	sortProbes(got)
 	n := min(len(got), len(want))
 	for i := range n {
 		g, w := got[i], want[i]
@@ -468,6 +507,25 @@ func checkCalls(t *testing.T, where string, got []call, want []reference.ApplyCa
 			}
 			t.Errorf("%s: %d calls, want %d; did not run %q", where, len(got), len(want), extra)
 		}
+	}
+}
+
+// sortProbes puts each run of DHCP probes (["dhcp-offer", device],
+// asked of every port at once) in the order of their devices, the order
+// the recording asked them in.
+func sortProbes(calls []call) {
+	probe := func(c call) bool { return len(c.argv) == 2 && c.argv[0] == "dhcp-offer" }
+	for i := 0; i < len(calls); {
+		j := i
+		for j < len(calls) && probe(calls[j]) {
+			j++
+		}
+		if j == i {
+			i++
+			continue
+		}
+		slices.SortStableFunc(calls[i:j], func(a, b call) int { return strings.Compare(a.argv[1], b.argv[1]) })
+		i = j
 	}
 }
 
@@ -523,6 +581,11 @@ func materialize(t *testing.T, root string, files map[string]*reference.ApplyFil
 		}
 		var data []byte
 		switch {
+		case e.Link != "":
+			if err := os.Symlink(e.Link, path); err != nil {
+				t.Fatal(err)
+			}
+			continue
 		case e.Size > 0:
 			mode, _ := strconv.ParseUint(strings.TrimPrefix(e.Mode, "0o"), 8, 32)
 			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fs.FileMode(mode))
@@ -584,6 +647,14 @@ func snapshot(t *testing.T, f *fakeSystem, root string) map[string]*reference.Ap
 			return err
 		}
 		rel, _ := filepath.Rel(root, path)
+		if d.Type()&fs.ModeSymlink != 0 { // never followed
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			out[rel] = &reference.ApplyFile{Link: f.norm(target)}
+			return nil
+		}
 		if d.IsDir() {
 			entries, err := os.ReadDir(path)
 			if err != nil {
@@ -640,6 +711,10 @@ func checkTree(t *testing.T, f *fakeSystem, got, want map[string]*reference.Appl
 			t.Errorf("%s: mode %s, want %s", rel, g.Mode, w.Mode)
 		}
 		switch {
+		case w.Link != "" || g.Link != "":
+			if g.Link != w.Link {
+				t.Errorf("%s: link %q, want %q", rel, g.Link, w.Link)
+			}
 		case w.Text != nil && rel == scheduleState:
 			// decisions.md, "applies": the fingerprint is 2.x's own.
 			if g.Text == nil || withoutFingerprint(*g.Text) != withoutFingerprint(*w.Text) {

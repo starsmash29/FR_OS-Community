@@ -55,6 +55,13 @@ type Paths struct {
 	WebUIState, SensorState, SNIEvents, ApplySocket string
 	// RuleHits is when each rule last matched (frfw.rule_hits).
 	RuleHits string
+	// The console's login screen: /etc/issue, and the files agetty
+	// prints after it (the generated admin password, the port summary).
+	Issue, InitialIssue, PortsIssue string
+	// What live-boot persistence reads: the kernel's command line and
+	// mounts, the block devices in sysfs, and where their nodes are
+	// (/dev; the names on command lines stay /dev/...).
+	Cmdline, Mounts, SysBlock, Dev string
 }
 
 // DefaultPaths are the router's.
@@ -82,6 +89,9 @@ func DefaultPaths() Paths {
 		WebUIState: "/etc/fr_os/webui", SensorState: "/etc/fr_os/sensors",
 		SNIEvents: "/var/log/fr_os-sni/events.jsonl", ApplySocket: "/run/fr_os/apply.sock",
 		RuleHits: "/etc/fr_os/rule_hits.json",
+		Issue:    "/etc/issue", InitialIssue: "/etc/issue.d/fr_os-initial-admin.issue",
+		PortsIssue: "/etc/issue.d/fr_os-ports.issue",
+		Cmdline:    "/proc/cmdline", Mounts: "/proc/mounts", SysBlock: "/sys/class/block", Dev: "/dev",
 	}
 }
 
@@ -162,6 +172,12 @@ type System struct {
 	// (firewall-cli ensure-accounts).
 	User  func(name string) (uid int, ok bool)
 	Group func(name string) (gid int, members []string, ok bool)
+	// ProbeDHCP, when set, answers DHCPOffer in place of the packet
+	// socket (tests).
+	ProbeDHCP func(device string) (network string, ok bool)
+	// Getpass asks the console for a password (getpass.getpass):
+	// ErrNoInput at the end of input.
+	Getpass func(prompt string) (string, error)
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;
@@ -183,6 +199,7 @@ func DefaultSystem() *System {
 		SetGRO:         ethtoolSetGRO,
 		User:           lookupUser,
 		Group:          lookupGroup,
+		Getpass:        getpass,
 	}
 }
 

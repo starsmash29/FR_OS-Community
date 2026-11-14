@@ -2,7 +2,9 @@
 Description=FR_OS webUI
 Documentation=https://github.com/starsmash29/FR_OS-Community
 After=fr-apply-helper.socket network.target
-Wants=fr-apply-helper.socket
+# fr-initial-password takes first boot's password off the console once
+# it no longer signs in (security-lessons G1).
+Wants=fr-apply-helper.socket fr-initial-password.path fr-initial-password.service
 
 [Service]
 Type=simple

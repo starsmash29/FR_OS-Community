@@ -35,7 +35,7 @@ out="$work/out"
 			"$root/reference/test_fros_tlsfp_cases.py" "$root/reference/test_fros_appid_cases.py" \
 			"$root/reference/test_fros_aiids_cases.py" "$root/reference/test_fros_iot_cases.py" \
 			"$root/reference/test_fros_xdpuser_cases.py" "$root/reference/test_fros_tlsfpd_cases.py" \
-			"$root/reference/test_fros_sensord_cases.py" \
+			"$root/reference/test_fros_sensord_cases.py" "$root/reference/test_fros_netdetect_cases.py" \
 			--ignore=tests/webui -q -p no:cacheprovider >"$work/pytest.log" 2>&1 || true
 )
 [ -s "$out/summary.json" ] || { tail -20 "$work/pytest.log" >&2; exit 1; }
@@ -45,7 +45,8 @@ mkdir -p testdata/reference
 xdp=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("xdp", 0))' testdata/reference/summary.json 2>/dev/null || echo 0)
 cp "$out/config.jsonl" "$out/ruleset.jsonl" "$out/yaml.jsonl" "$out/yaml_config.jsonl" "$out/helper.jsonl" \
 	"$out/render.jsonl" "$out/apply.jsonl" "$out/webui.jsonl" "$out/qr.jsonl" "$out/tlsfp.jsonl" "$out/appid.jsonl" \
-	"$out/aiids.jsonl" "$out/iot.jsonl" "$out/xdpuser.jsonl" "$out/tlsfpd.jsonl" "$out/sensord.jsonl" "$out/summary.json" \
+	"$out/aiids.jsonl" "$out/iot.jsonl" "$out/xdpuser.jsonl" "$out/tlsfpd.jsonl" "$out/sensord.jsonl" "$out/netdetect.jsonl" \
+	"$out/summary.json" \
 	testdata/reference/
 echo "$pin" >testdata/reference/PIN
 python3 - "$xdp" testdata/reference/summary.json <<'PY'

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/starsmash29/fr_os-community/apply"
 )
 
 func TestRecordedListenIsReadAs1xReadsIt(t *testing.T) {
@@ -35,11 +37,11 @@ func TestRecordedListenIsReadAs1xReadsIt(t *testing.T) {
 		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got := recordedListen(path); !slices.Equal(got, want) {
+		if got := apply.RecordedWebUIListen(path); !slices.Equal(got, want) {
 			t.Errorf("%s: %q, want %q", text, got, want)
 		}
 	}
-	if got := recordedListen(filepath.Join(dir, "none.json")); got != nil {
+	if got := apply.RecordedWebUIListen(filepath.Join(dir, "none.json")); got != nil {
 		t.Errorf("no record: %q", got)
 	}
 }

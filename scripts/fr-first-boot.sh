@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# First-boot setup for an FR_OS image, as 1.x's scripts/fr-first-boot.sh
+# (kept a shell script so it reads line for line against it). Runs once,
+# as root, via fr-first-boot.service; idempotent (checks its own marker
+# file) so a re-run -- or the service firing twice -- is a no-op.
+#
+# Everything FR_OS needs is in the image already (the Go and Rust
+# binaries under /usr/libexec/fr_os, the units): this script only
+# creates PER-MACHINE state that cannot be baked into the image (which
+# NIC is which, the admin password) and starts the services. The admin
+# reads the generated password off the console and signs in to the
+# webUI -- that's expected, not "terminal work".
+set -euo pipefail
+
+CONFIG_DIR=/etc/fr_os
+MARKER="$CONFIG_DIR/.first-boot-done"
+FIREWALL_CLI=${FIREWALL_CLI:-/usr/libexec/fr_os/firewall-cli}
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ $EUID -ne 0 ]]; then
+    echo "fr-first-boot: must run as root" >&2
+    exit 1
+fi
+
+if [[ -f "$MARKER" ]]; then
+    echo "fr-first-boot: already completed ($MARKER exists), skipping"
+    exit 0
+fi
+
+echo "fr-first-boot: running initial setup..."
+
+"$SCRIPTS_DIR/install-system-integration.sh"
+
+# A DHCP client (ifupdown) on exactly the given ports, started now.
+write_dhcp_clients() {
+    local file=/etc/network/interfaces.d/fr_os-wan dev
+    mkdir -p /etc/network/interfaces.d
+    echo "# Written by fr-first-boot: the WAN port's DHCP client." > "$file"
+    for dev in "$@"; do
+        printf 'allow-hotplug %s\niface %s inet dhcp\n' "$dev" "$dev" >> "$file"
+    done
+    # In ifup@'s own unit (as on every later boot), not in this one.
+    for dev in "$@"; do
+        systemctl start --no-block "ifup@$dev.service" || true
+    done
+}
+
+# Which port is the WAN (ROADMAP SEC-8): the one where a DHCP server
+# already answers -- the upstream network's. The LAN, where this router
+# will serve DHCP itself, is never a port that already has a server.
+# With no server answering anywhere it falls back to port order and says
+# so; with servers on several ports it assigns nothing (see
+# apply.ChooseWanLan). More than two ports or OPT zones still take
+# 'firewall-cli assign-interfaces' or the webUI's Interfaces screen.
+mapfile -t DEVICES < <("$FIREWALL_CLI" detect-interfaces | awk 'NR>1 {print $1}')
+mapfile -t CHOICE < <("$FIREWALL_CLI" detect-wan-lan || true)
+# The LAN's address comes with them: outside the network the WAN's DHCP
+# server offers (ROADMAP NET-12).
+read -r WAN LAN LAN_ADDRESS <<< "${CHOICE[0]:-}" || true
+BASIS="${CHOICE[1]:-no answer from detect-wan-lan}"
+echo "fr-first-boot: WAN/LAN: $BASIS"
+
+if [[ -n "${WAN:-}" && -n "${LAN:-}" && -n "${LAN_ADDRESS:-}" ]]; then
+    "$FIREWALL_CLI" assign-interfaces --wan "$WAN" --lan "$LAN" --lan-address "$LAN_ADDRESS" --force
+    # The webUI reads the config as the unprivileged fr_os-webui user.
+    chgrp fr_os-webui "$CONFIG_DIR/config.yaml"
+    chmod 0640 "$CONFIG_DIR/config.yaml"
+    echo "fr-first-boot: assigned WAN=$WAN LAN=$LAN (LAN $LAN_ADDRESS with DHCP)"
+    # The WAN port gets its address from the upstream network: a DHCP
+    # client on it, and on it alone. On the LAN the router *is* the DHCP
+    # server, and a client there would flush the apply's static address
+    # (the image boots with ip=frommedia so live-boot doesn't put one
+    # back on every boot).
+    write_dhcp_clients "$WAN"
+else
+    echo "fr-first-boot: no WAN/LAN assignment ($BASIS);" >&2
+    echo "  run 'firewall-cli assign-interfaces' or use the webUI's Interfaces screen" >&2
+    # No LAN to protect, or no safe one to pick: keep whatever there is
+    # reachable over DHCP, and serve DHCP nowhere.
+    write_dhcp_clients "${DEVICES[@]}"
+fi
+
+# The password goes on the console's login screen through a root-only
+# /etc/issue.d file (agetty reads it as root), never into the
+# world-readable /etc/issue or this unit's journal, and it disappears
+# once it has been changed (fr-initial-password.path).
+"$FIREWALL_CLI" set-admin-password --generate --show-on-console
+
+# Which port is which, its link and the webUI's address go on the
+# console through fr-console-ports (started below), kept current on every
+# link change -- not a line written once here.
+
+# Each unit on its own: one that fails to start is reported and stays
+# enabled (systemd retries it every boot), but doesn't stop the others --
+# nor leave first boot unfinished, which would rerun it (and replace the
+# admin password) at every boot. 1.x's fr-update-check.timer,
+# fr-kernel-prepare.timer and fr-update-helper.socket come with phases
+# 4f-3 and 4f-4.
+FAILED_UNITS=()
+for unit in \
+    fr-firewall \
+    fr-apply-helper.socket \
+    fr-webui \
+    fr-ai-ids \
+    fr-iot-scan.timer \
+    fr-xdp-sni-logger \
+    fr-appid \
+    fr-schedule-check.timer \
+    fr-dns-log-trim.timer \
+    fr-adblock-refresh.timer \
+    fr-tls-fp \
+    fr-console-ports
+do
+    systemctl enable "$unit"
+    # restart, not start: fr-firewall is already active with the
+    # fail-closed baseline (no config existed when it ran at boot).
+    if ! systemctl restart "$unit"; then
+        FAILED_UNITS+=("$unit")
+        echo "fr-first-boot: $unit failed to start -- see 'journalctl -u $unit'" >&2
+    fi
+done
+
+mkdir -p "$CONFIG_DIR"
+touch "$MARKER"
+if [[ ${#FAILED_UNITS[@]} -gt 0 ]]; then
+    echo "fr-first-boot: done, but these did not start: ${FAILED_UNITS[*]}"
+else
+    echo "fr-first-boot: done"
+fi

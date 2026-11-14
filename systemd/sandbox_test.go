@@ -37,17 +37,34 @@ var everywhere = map[string][]string{
 // root is the services that run as root, and why. Every other service
 // runs as its own unprivileged account.
 var root = map[string]string{
-	"fr-apply-helper.service":    "the privilege boundary: applies the network config",
-	"fr-apply-revert.service":    "a revert is an apply: the apply-helper's own sandbox",
-	"fr-firewall.service":        "the boot's apply: the apply-helper's own sandbox",
-	"fr-schedule-check.service":  "reads nft's counters, and a refresh is an apply: the apply-helper's sandbox",
-	"fr-accounts.service":        "useradd, groupadd, usermod and gpasswd write the account files; no network",
-	"fr-dns-log-trim.service":    "empties dnsmasq's query log with CAP_DAC_OVERRIDE alone; no network",
-	"fr-adblock-refresh.service": "writes the lists under /etc/fr_os, with no capability at all",
-	"fr-adblock-dns.service":     "dnsmasq binds port 53, then becomes its own user",
-	"fr-dhcp6.service":           "dhcpcd sets addresses and routes, then privilege-separates itself",
-	"fr-tls-fp.service":          "opens a pinned BPF map, then becomes fr_os-sensor (fros_xdp::privdrop)",
-	"fr-xdp-sni-logger.service":  "opens a pinned BPF map and its event file, then becomes fr_os-sensor",
+	"fr-apply-helper.service":      "the privilege boundary: applies the network config",
+	"fr-apply-revert.service":      "a revert is an apply: the apply-helper's own sandbox",
+	"fr-firewall.service":          "the boot's apply: the apply-helper's own sandbox",
+	"fr-schedule-check.service":    "reads nft's counters, and a refresh is an apply: the apply-helper's sandbox",
+	"fr-accounts.service":          "useradd, groupadd, usermod and gpasswd write the account files; no network",
+	"fr-dns-log-trim.service":      "empties dnsmasq's query log with CAP_DAC_OVERRIDE alone; no network",
+	"fr-adblock-refresh.service":   "writes the lists under /etc/fr_os, with no capability at all",
+	"fr-adblock-dns.service":       "dnsmasq binds port 53, then becomes its own user",
+	"fr-dhcp6.service":             "dhcpcd sets addresses and routes, then privilege-separates itself",
+	"fr-tls-fp.service":            "opens a pinned BPF map, then becomes fr_os-sensor (fros_xdp::privdrop)",
+	"fr-xdp-sni-logger.service":    "opens a pinned BPF map and its event file, then becomes fr_os-sensor",
+	"fr-first-boot.service":        "once per machine: writes /etc (accounts, config, console), probes each port for DHCP",
+	"fr-persistence-setup.service": "partitions and formats the boot medium's free space and mounts it; no network",
+	"fr-initial-password.service":  "reads the webUI's account file with CAP_DAC_READ_SEARCH alone; no network",
+	"fr-console-ports.service":     "reads root's applied config and writes root's console files, with no capability",
+}
+
+// broader is what a service holds beyond everywhere, and why: the
+// setting's value it has instead.
+var broader = map[string]map[string]string{
+	// The raw block devices: it partitions and formats the boot medium.
+	"fr-persistence-setup.service": {"PrivateDevices": "no"},
+}
+
+// families is the socket families a service may have beyond AF_UNIX,
+// AF_NETLINK, AF_INET and AF_INET6, and why.
+var families = map[string]map[string]string{
+	"fr-first-boot.service": {"AF_PACKET": "detect-wan-lan's DHCP probe, before a port has an address (SEC-8)"},
 }
 
 // never is no service's to have.
@@ -57,7 +74,8 @@ var never = []string{"CAP_SYS_MODULE", "CAP_SYS_PTRACE", "CAP_SYS_BOOT", "CAP_SY
 
 // exposure is the `systemd-analyze security` budget (0 best, 10 worst).
 var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-revert.service": 4.5,
-	"fr-firewall.service": 4.5, "fr-schedule-check.service": 4.5, "fr-dhcp6.service": 3.0, "fr-webui.service": 2.5}
+	"fr-firewall.service": 4.5, "fr-schedule-check.service": 4.5, "fr-dhcp6.service": 3.0, "fr-webui.service": 2.5,
+	"fr-first-boot.service": 3.0}
 
 // service is a unit's [Service]: each key and every value it is given.
 func service(t *testing.T, name string) map[string][]string {
@@ -107,6 +125,9 @@ func TestSandbox(t *testing.T) {
 	for _, name := range services(t) {
 		s := service(t, name)
 		for key, allowed := range everywhere {
+			if v, ok := broader[name][key]; ok {
+				allowed = []string{v}
+			}
 			if v := last(s, key); !contains(allowed, v) {
 				t.Errorf("%s: %s=%q, want one of %q", name, key, v, allowed)
 			}
@@ -115,7 +136,7 @@ func TestSandbox(t *testing.T) {
 			t.Errorf("%s: no SystemCallFilter", name)
 		}
 		for _, family := range strings.Fields(last(s, "RestrictAddressFamilies")) {
-			if !contains([]string{"AF_UNIX", "AF_NETLINK", "AF_INET", "AF_INET6"}, family) {
+			if !contains([]string{"AF_UNIX", "AF_NETLINK", "AF_INET", "AF_INET6"}, family) && families[name][family] == "" {
 				t.Errorf("%s: socket family %s", name, family)
 			}
 		}
@@ -271,15 +292,25 @@ func TestTheSNIEventFileIsWrittenByItsLoggerAndReadByOneGroup(t *testing.T) {
 func TestFirewallCLIUnits(t *testing.T) {
 	const cli = "/usr/libexec/fr_os/firewall-cli"
 	for name, want := range map[string]string{
-		"fr-firewall.service":        cli + " apply --fail-closed /etc/fr_os/config.yaml",
-		"fr-accounts.service":        cli + " ensure-accounts",
-		"fr-schedule-check.service":  cli + " schedule-check /etc/fr_os/config.yaml",
-		"fr-dns-log-trim.service":    cli + " dns-log-trim",
-		"fr-adblock-refresh.service": cli + " adblock-refresh --scheduled /etc/fr_os/config.yaml",
+		"fr-firewall.service":          cli + " apply --fail-closed /etc/fr_os/config.yaml",
+		"fr-accounts.service":          cli + " ensure-accounts",
+		"fr-schedule-check.service":    cli + " schedule-check /etc/fr_os/config.yaml",
+		"fr-dns-log-trim.service":      cli + " dns-log-trim",
+		"fr-adblock-refresh.service":   cli + " adblock-refresh --scheduled /etc/fr_os/config.yaml",
+		"fr-persistence-setup.service": cli + " persistence auto --reboot",
+		"fr-initial-password.service":  cli + " initial-password",
+		"fr-console-ports.service":     cli + " console-ports --watch",
+		"fr-first-boot.service":        "/usr/libexec/fr_os/fr-first-boot.sh",
 	} {
 		s := service(t, name)
 		if got := last(s, "ExecStart"); got != want {
 			t.Errorf("%s: ExecStart=%q, want %q", name, got, want)
+		}
+		if name == "fr-console-ports.service" {
+			if got := last(s, "Type"); got != "simple" {
+				t.Errorf("%s: Type=%q", name, got)
+			}
+			continue
 		}
 		if got := last(s, "Type"); got != "oneshot" {
 			t.Errorf("%s: Type=%q", name, got)
@@ -291,6 +322,13 @@ func TestFirewallCLIUnits(t *testing.T) {
 			"RestrictAddressFamilies": "AF_UNIX", "ReadWritePaths": "-/var/log/fr_os-dns"},
 		"fr-accounts.service": {"PrivateNetwork": "yes", "RestrictAddressFamilies": "AF_UNIX AF_NETLINK"},
 		"fr-firewall.service": {"RemainAfterExit": "yes", "StandardInput": "null"},
+		"fr-persistence-setup.service": {"PrivateNetwork": "yes", "CapabilityBoundingSet": "CAP_SYS_ADMIN",
+			"RestrictAddressFamilies": "AF_UNIX AF_NETLINK"},
+		"fr-initial-password.service": {"PrivateNetwork": "yes", "CapabilityBoundingSet": "CAP_DAC_READ_SEARCH",
+			"RestrictAddressFamilies": "AF_UNIX", "ReadWritePaths": "-/etc/issue.d -/etc/issue"},
+		"fr-console-ports.service": {"CapabilityBoundingSet": "", "IPAddressDeny": "any",
+			"RestrictAddressFamilies": "AF_UNIX AF_NETLINK"},
+		"fr-first-boot.service": {"RemainAfterExit": "yes"},
 	} {
 		s := service(t, name)
 		for key, v := range want {
@@ -374,5 +412,71 @@ func TestExposure(t *testing.T) {
 		if score > budget {
 			t.Errorf("%s: exposure %.1f, budget %.1f", name, score, budget)
 		}
+	}
+}
+
+// First boot runs as 1.x's: before fr-first-boot.service on a live image
+// booted for persistence (which may reboot once), never again once its
+// marker is there; the webUI pulls in the unit that takes the generated
+// password off the console (security-lessons G1), which watches the
+// account file.
+func TestFirstBootUnits(t *testing.T) {
+	unit := section(t, "fr-persistence-setup.service", "[Unit]")
+	if got := unit["ConditionKernelCommandLine"]; !slices.Equal(got, []string{"boot=live", "persistence"}) {
+		t.Errorf("fr-persistence-setup.service: ConditionKernelCommandLine=%q", got)
+	}
+	if got := last(unit, "Before"); got != "fr-first-boot.service" {
+		t.Errorf("fr-persistence-setup.service: Before=%q", got)
+	}
+	unit = section(t, "fr-first-boot.service", "[Unit]")
+	if got := last(unit, "ConditionPathExists"); got != "!/etc/fr_os/.first-boot-done" {
+		t.Errorf("fr-first-boot.service: ConditionPathExists=%q", got)
+	}
+	if got := strings.Fields(last(unit, "After")); !slices.Contains(got, "fr-persistence-setup.service") {
+		t.Errorf("fr-first-boot.service: After=%q", got)
+	}
+	wants := strings.Fields(last(section(t, "fr-webui.service", "[Unit]"), "Wants"))
+	for _, w := range []string{"fr-initial-password.path", "fr-initial-password.service"} {
+		if !slices.Contains(wants, w) {
+			t.Errorf("fr-webui.service doesn't want %s", w)
+		}
+	}
+	path := section(t, "fr-initial-password.path", "[Path]")
+	if got := last(path, "PathChanged"); got != "/etc/fr_os/webui/auth.json" {
+		t.Errorf("fr-initial-password.path: PathChanged=%q", got)
+	}
+	if got := last(path, "Unit"); got != "fr-initial-password.service" {
+		t.Errorf("fr-initial-password.path: Unit=%q", got)
+	}
+}
+
+// fr-first-boot.sh starts only units this directory has, keeps the
+// generated password out of the shell (it goes to the console's
+// root-only file), and runs firewall-cli from where the image installs
+// it.
+func TestFirstBootScript(t *testing.T) {
+	text, err := os.ReadFile("../scripts/fr-first-boot.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(text)
+	loop := regexp.MustCompile(`(?s)for unit in \\\n(.*?)\ndo\n`).FindStringSubmatch(script)
+	if loop == nil {
+		t.Fatal("no unit loop")
+	}
+	for _, unit := range strings.Fields(strings.ReplaceAll(loop[1], `\`, "")) {
+		name := unit
+		if !strings.Contains(name, ".") {
+			name += ".service"
+		}
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("fr-first-boot.sh starts %s, which isn't here", unit)
+		}
+	}
+	if !strings.Contains(script, "set-admin-password --generate --show-on-console") || strings.Contains(script, "PASSWORD") {
+		t.Error("the generated password must go to the console only")
+	}
+	if !strings.Contains(script, "FIREWALL_CLI=${FIREWALL_CLI:-/usr/libexec/fr_os/firewall-cli}") {
+		t.Error("firewall-cli not from /usr/libexec/fr_os")
 	}
 }

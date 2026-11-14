@@ -63,9 +63,13 @@ lists, through its
 apply-helper, and the `firewall-cli` commands the router's units run
 (the boot's fail-closed apply, an apply from the console, validate,
 render, the schedule check, the query log trim, the ad-block refresh,
-ensure-accounts with the accounts given), against a fake system (every
-path under a directory of its own, every program and every download
-answered from a table, steps made to fail one by one) and records the
+ensure-accounts with the accounts given, and first boot's: the ports
+and the WAN/LAN choice with each port's DHCP probe answered from the
+table, the skeleton config, the admin password generated or typed, a
+second factor's reset, the console's password and port summary, and
+the persistence partition on a sysfs tree of disks), against a fake
+system (every path under a directory of its own, every program and
+every download answered from a table, steps made to fail one by one) and records the
 programs run, the replies (a command's exit status and output) and the
 files left;
 `reference/test_fros_webui_cases.py`, which takes 1.x's webUI
@@ -110,7 +114,9 @@ file and event log; and 1.x's IoT scan asking that fake helper, and
 its mDNS discovery on a real socket against a fake responder on
 loopback (damaged, foreign and too many answers, the router's own),
 recording each request, message, inventory file, query and service
-found. One recording needs
+found; and `reference/test_fros_netdetect_cases.py`, which records the
+DHCPDISCOVER frame 1.x's first boot sends and the network it reads from
+offers built, masked every way and damaged at random. One recording needs
 root and runs on its own: `reference/generate-xdp.sh` compiles 1.x's
 XDP program (`bpf/xdp_sni_filter.c`) and has the kernel run it
 (`BPF_PROG_TEST_RUN`) on the frames of `reference/test_fros_xdp_cases.py`
@@ -149,7 +155,9 @@ crates replay those cases:
   print the same and write the same event log;
 - the IoT crate must read the same vendors and neighbours, find the
   same mDNS service types, score every device the same, ask the
-  helpers the same and write the same inventory file, byte for byte.
+  helpers the same and write the same inventory file, byte for byte;
+- the DHCP probe must send the same DISCOVER frame, byte for byte, and
+  read the same network from every answer;
 - the XDP program must give every frame the same verdict, move the
   same counters, report the same events and hello copies, and leave
   the same flow state, in the same maps.
@@ -231,14 +239,15 @@ Every PR is reviewed by the maintainer's integrating agent (Claude Code), which 
 | `ipc/` | Go wire format (importable by other modules, unlike `internal/`) |
 | `config/` | Config schema and checks: `config.Parse`, held to 1.x's `parse_config`; `config.ReadFile` and `config.LoadYAML`, held to PyYAML's `safe_load`, and `config.DumpYAML`, held to its `safe_dump` |
 | `nft/` | The nftables ruleset builder: `nft.Build`, held to 1.x's `build_ruleset` byte for byte, and the rule schedules |
-| `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time, and `cmd/firewall-cli` is the router's own commands (`Server.CLI`, held to 1.x's `frfw.cli`): the boot's apply in fail-closed mode (`fr-firewall.service`), validate, render, the schedule check and rule hit counters, the query log trim, the ad-block refresh and ensure-accounts |
-| `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup, the XDP SNI filter (attach, keep, replace, GRO, blocklist, switches; 1.x's `frfw.xdp.sync_sni_filter`), the sensor daemons' JSON view of the config (`apply.SensorView`, `sensor-view.json`) (held to 1.x's `frfw.provision`, `frfw.transaction`, `frfw.apply` and `frfw.xdp`) |
+| `helper/` | The apply-helper: socket server, peer policy (`SO_PEERCRED`), and the commands, held to 1.x's `frfw.helper` reply for reply, and an apply held for confirmation (1.x's `frfw.apply_confirm`); `cmd/fr-apply-helper` runs it, `cmd/fr-apply-revert` is the unit that goes back from an apply not confirmed in time, and `cmd/firewall-cli` is the router's own commands (`Server.CLI`, held to 1.x's `frfw.cli`): the boot's apply in fail-closed mode (`fr-firewall.service`), validate, render, the schedule check and rule hit counters, the query log trim, the ad-block refresh and ensure-accounts, and first boot's commands (`detect-interfaces`, `detect-wan-lan`, `assign-interfaces`, `set-admin-password`, `mfa-reset`, `initial-password`, `console-ports`, `persistence`) |
+| `apply/` | Making the system match a config, as one transaction: the steps of an apply in 1.x's order with their preflight and undo (`System.ApplyAll`), the undo journal and the error an apply reports, file/service/link state captured for rollback, atomic writes, systemctl, loading a ruleset with its backup, the XDP SNI filter (attach, keep, replace, GRO, blocklist, switches; 1.x's `frfw.xdp.sync_sni_filter`), the sensor daemons' JSON view of the config (`apply.SensorView`, `sensor-view.json`), and first boot's system work: the ports from sysfs, the DHCP probe on a packet socket and the WAN/LAN choice, the skeleton config, the console's port summary (refreshed on rtnetlink events) and initial password, and the persistence partition (held to 1.x's `frfw.provision`, `frfw.transaction`, `frfw.apply`, `frfw.xdp`, `frfw.netdetect`, `frfw.skeleton`, `frfw.console_ports`, `frfw.initial_password` and `frfw.persistence`) |
 | `render/` | The text of the files an apply writes (Kea, dnsmasq, dhcpcd, RA, sysctl, WireGuard, sshd, PQC), held to 1.x's renderers byte for byte |
 | `webui/` | The webUI (`net/http` + `html/template`): sign-in, sessions held to 1.x's itsdangerous cookies, CSRF, second factors (TOTP, WebAuthn), accounts, the dashboard (with its security score, rule check and attack-surface verdicts), the firewall screens (rules, NAT, interfaces, DHCP, segments), the filtering screens (ad-block and local DNS, application control, TLS fingerprints, the XDP SNI filter, IoT, AI-IDS), the ZTNA gate (its admin settings and its public sign-in and status pages), the WireGuard VPN screen, the system screen, the security checklist, the attack surface, the update screen (read-only), the Prometheus metrics (behind their bearer token) and the XDP filter's live log (server-sent events, one `tail -F` per session), replayed against 1.x's recorded sessions (`webui.jsonl`), and its QR codes held to segno's (`qr.jsonl`); `cmd/fr-webui` serves it over HTTPS. The Go webUI is what ships (`systemd/fr-webui.service` runs `/usr/libexec/fr_os/fr-webui` as `fr_os-webui`); FR_OS 1.x is reference only |
 | `appid/` | The application catalog (app control's domain names) |
 | `internal/` | Go packages private to this module; `internal/reference` loads the 1.x reference, `internal/pyyaml` is the YAML reader and writer (a port of PyYAML) |
 | `crates/` | Rust workspace; `crates/fros-ipc` is the wire format; `crates/fros-sensor` is what the sensor crates share to answer as 1.x's Python does (its JSON dialect, dict order, text classes, exact float arithmetic, dnsmasq's log prefix); `crates/fros-tlsfp` is TLS client fingerprinting (ClientHello parsing, JA3/JA4, reassembly across segments, the fingerprint inventory and its state file), held to 1.x's `frfw.tlsfp` (`tlsfp.jsonl`), and `fr-tls-fp`, its daemon, held to 1.x's `frfw.tlsfp.daemon` (`tlsfpd.jsonl`); `crates/fros-appid` is application identification (the catalog, name matching, per-app usage and its state file, the log readers), held to 1.x's `frfw.appid` (`appid.jsonl`), and `fr-appid`, its daemon, held to 1.x's `frfw.appid.daemon` (`sensord.jsonl`); `crates/fros-aiids` is the AI-IDS anomaly engine, its DGA heuristic and log readers, held to 1.x's `frfw.ai_ids` (`aiids.jsonl`), and `fr-ai-ids`, its daemon (the sources it scores, conntrack samples and quarantines through the apply-helper, its event log), held to 1.x's `frfw.ai_ids.daemon` (`sensord.jsonl`); `crates/fros-sensor`'s `follow` follows a log file as `tail -n 0 -F` does, for both; `crates/fros-iot` is IoT discovery (MAC vendors from the IEEE registry, the neighbour table, mDNS service discovery, the IoT scoring, the scan and its inventory file, read from the sensor's JSON view of the config), held to 1.x's `frfw.iot` (`iot.jsonl`), and `fr-iot-scan`, its oneshot scan (the helper's `dhcp_leases` and `iot_sync_isolation`, the mDNS socket, the inventory written), held to 1.x's `frfw.iot.scanner` and `frfw.iot.mdns.discover` (`sensord.jsonl`); `crates/fros-xdp-ebpf` is the XDP SNI filter's kernel side in aya (the filter, the split-hello follower and the IPv6 path, with 1.x's maps), held to 1.x's `bpf/xdp_sni_filter.c` frame for frame (`xdp.jsonl`) by `crates/fros-xdp`'s replay; `crates/fros-xdp` is its userland: `fr-xdp`, which loads and pins it, gives the pinned program's id, syncs the blocklist and writes the switches and reads the counters for the Go apply (fixed argv, absolute paths after `--`), and the event and hello-copy records and the event file, held to 1.x's `frfw.xdp` (`xdpuser.jsonl`), the ring buffer reader and the privilege drop the readers share, and `fr-xdp-sni-logger`, which writes the filter's events to the event file; `crates/fros-sensor`'s `helper` is 1.x's apply-helper client |
 | `systemd/` | The units, each with its sandbox (`systemd/sandbox_test.go` checks it, security-lessons I1) |
+| `scripts/` | First boot (`fr-first-boot.sh`, run once by `fr-first-boot.service`) and `install-system-integration.sh`, shell as 1.x's, checked by `shellcheck` in CI |
 | `reference/` | The pinned 1.x commit, the capture plugin and the extra edge-case inputs |
 | `testdata/` | Shared test vectors and the recorded 1.x reference |
 | `docs/security-lessons.md` | The security requirements every feature meets (IDs like `I1`, `G3`), carried over from 1.x |

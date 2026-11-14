@@ -1,0 +1,51 @@
+[Unit]
+Description=FR_OS persistence setup (keep the live system's state across reboots)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+# Only on the live image booted with the "persistence" option; the
+# command itself does nothing when persistence is already in use. It
+# runs before fr-first-boot so that, when it creates the persistence
+# partition and reboots, first boot's password and settings are made on
+# the persistent system, not in RAM.
+ConditionKernelCommandLine=boot=live
+ConditionKernelCommandLine=persistence
+Before=fr-first-boot.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/fr_os/firewall-cli persistence auto --reboot
+StandardOutput=journal+console
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root: partitions the free space after the boot medium's last
+# partition and formats it (the raw block devices, hence no
+# PrivateDevices), and mounts it in this unit's own mount namespace to
+# write its persistence.conf (CAP_SYS_ADMIN, the mount calls). The
+# reboot is asked of systemd. Nothing is written outside /tmp but the
+# disk itself; no network at all.
+ProtectSystem=strict
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service @mount
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_SYS_ADMIN
+
+[Install]
+WantedBy=multi-user.target
