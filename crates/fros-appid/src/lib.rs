@@ -9,6 +9,7 @@
 //! every function is total over its input (tests/props.rs).
 
 pub mod catalog;
+pub mod daemon;
 pub mod observer;
 pub mod usage;
 

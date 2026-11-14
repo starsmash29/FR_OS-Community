@@ -1,0 +1,509 @@
+"""FR_OS 1.x's application identification and AI-IDS daemons
+(frfw.appid.daemon, frfw.ai_ids.daemon) run on recorded input, for FR_OS
+2 (sensord.jsonl; reference/generate.sh runs this module). The libraries
+under them (the catalog, name matching, usage counts, the anomaly engine,
+the DGA heuristic and the line readers) are recorded by
+reference/test_fros_appid_cases.py and reference/test_fros_aiids_cases.py;
+this is what the daemons add:
+
+- `view`: what each daemon takes from a config, which FR_OS 2's apply
+  writes into the sensors' view (apply.SensorView): fr-appid's sources
+  (`source_units`), and fr-ai-ids's switch, excluded MACs and the
+  addresses they resolve to (`resolve_excluded_ips`), the networks it
+  scores (`internal_networks`), the configured addresses it never
+  quarantines (`infrastructure_ips` without the routing table and
+  resolv.conf, which it reads at run time), the threat categories whose
+  answers it counts and the quarantine time;
+- `appid`: an `AppIdDaemon` started on a usage file (none, good, broken),
+  fed query-log and SNI event lines at recorded clocks, writing its
+  usage file: every file, byte for byte, and an exception it lets
+  through at start (it then dies; the steps are those of a daemon
+  started without the file);
+- `aiids`: an `IDSDaemon` with the view of a config, a routing table and
+  a resolv.conf, and an event log (none, good, broken), fed SNI and
+  query-log lines, conntrack samples and evaluations at recorded clocks.
+  Each sample and quarantine goes through 1.x's real helper client to a
+  fake apply-helper on a Unix socket that answers recorded bytes:
+  recorded are each request line, what the daemon prints, the events
+  each evaluation flags and the event log it writes, byte for byte, and
+  an exception it lets through (it then dies).
+
+The socket's path is recorded as @SOCK@. Nothing here asserts anything
+about 1.x.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import copy
+import dataclasses
+import io
+import json
+import random
+import sys
+import tempfile
+from pathlib import Path
+
+from frfw import paths
+from frfw.ai_ids import daemon as ids_daemon
+from frfw.ai_ids.engine import AnomalyEngine
+from frfw.appid import daemon as appid_daemon
+from frfw.config import parse_config
+from frfw.helper import client as helper_client
+
+sys.path.insert(0, str(Path(__file__).parent))
+from test_fros_tlsfpd_cases import SOCK, SOCK_DIR, FakeHelper, _answer_json, _text  # noqa: E402
+
+T0 = 1_700_000_000.0
+
+
+def _record(case: dict) -> None:
+    capture = sys.modules.get("fros_capture")
+    if capture is not None:
+        capture._record("sensord", case)
+
+
+# --- configs and the view ---------------------------------------------------------------------------
+
+
+def _base() -> dict:
+    return {
+        "version": 1,
+        "hostname": "r",
+        "interfaces": {
+            "wan": {"device": "eth0", "zone": "wan"},
+            "lan": {"device": "eth1", "zone": "lan", "address": "10.0.0.1/24"},
+        },
+        "zones": {"wan": {}, "lan": {}},
+        "rules": [{"name": "out", "action": "accept", "from_zone": "lan", "to_zone": "wan"}],
+        "nat": {"masquerade": [{"out_zone": "wan"}]},
+        "dhcp": {
+            "lan": {
+                "range_start": "10.0.0.100",
+                "range_end": "10.0.0.200",
+                "dns_servers": ["10.0.0.1"],
+                "reservations": [{"mac": "aa:bb:cc:dd:ee:ff", "address": "10.0.0.50"}],
+            }
+        },
+        "ai_ids": {"enabled": True},
+    }
+
+
+def _with(**changes) -> dict:
+    """The base config with top-level keys replaced (None: removed)."""
+    raw = _base()
+    for key, value in changes.items():
+        if value is None:
+            raw.pop(key, None)
+        else:
+            raw[key] = value
+    return raw
+
+
+def _view(config) -> dict:
+    """What FR_OS 2's sensor view holds for these daemons, from 1.x's
+    own functions."""
+    units = appid_daemon.source_units(config)
+    sources = ["dns" if u != appid_daemon.XDP_LOGGER_UNIT else "sni" for u in units]
+    with tempfile.TemporaryDirectory() as tmp:
+        empty = Path(tmp) / "empty"
+        empty.write_text("")
+        infrastructure = ids_daemon.infrastructure_ips(config, route_path=empty, resolv_path=empty)
+    threat = sorted(n for n in ids_daemon.THREAT_CATEGORIES if n in config.adblocker.categories)
+    return {
+        "app_control": {"sources": sources},
+        "ai_ids": {
+            "enabled": config.ai_ids.enabled,
+            "excluded_macs": list(config.ai_ids.excluded_macs),
+            "excluded_ips": sorted(ids_daemon.resolve_excluded_ips(config)),
+            "internal_networks": [str(n) for n in ids_daemon.internal_networks(config)],
+            "infrastructure": sorted(infrastructure),
+            "threat_categories": threat,
+            "query_log": config.adblocker.enabled and config.adblocker.query_logging,
+            "quarantine_duration_seconds": config.ai_ids.quarantine_duration_seconds,
+        },
+    }
+
+
+_LIST = ["https://lists.example/x.txt"]
+ADBLOCK = {"enabled": True, "query_logging": True,
+           "categories": {"malware": _LIST, "phishing": _LIST, "gambling": _LIST}}
+
+VIEW_CONFIGS = {
+    "base": _base(),
+    "ids off": _with(ai_ids={"enabled": False}),
+    "no ai_ids": _with(ai_ids=None),
+    "excluded with reservation": _with(ai_ids={"enabled": True, "excluded_macs": ["aa:bb:cc:dd:ee:ff"],
+                                               "quarantine_duration_seconds": 999}),
+    "excluded upper case": _with(ai_ids={"enabled": True, "excluded_macs": ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"]}),
+    "excluded without reservation": _with(ai_ids={"enabled": True, "excluded_macs": ["11:22:33:44:55:66"]}),
+    "no masquerade": _with(nat=None),
+    "two lans": _with(
+        interfaces={
+            "wan": {"device": "eth0", "zone": "wan", "address": "192.0.2.2/24"},
+            "lan": {"device": "eth1", "zone": "lan", "address": "10.0.0.1/24"},
+            "iot": {"device": "eth2", "zone": "iot", "address": "10.0.5.1/24"},
+            "guest": {"device": "eth3", "zone": "guest", "address": "10.0.0.129/25"},
+        },
+        zones={"wan": {}, "lan": {}, "iot": {}, "guest": {}},
+    ),
+    "wireguard": _with(wireguard={"enabled": True, "address": "10.8.0.1/24", "listen_port": 51820},
+                       zones={"wan": {}, "lan": {}, "vpn": {}}),
+    "adblock": _with(adblocker=ADBLOCK),
+    "adblock no logging": _with(adblocker={**ADBLOCK, "query_logging": False}),
+    "adblock off": _with(adblocker={**ADBLOCK, "enabled": False}),
+    "adblock gambling only": _with(adblocker={**ADBLOCK, "categories": {"gambling": _LIST}}),
+    "appid dns": _with(adblocker=ADBLOCK, app_control={"enabled": True}),
+    "appid off": _with(adblocker=ADBLOCK, app_control={"enabled": False, "observe_sni": True},
+                       xdp_sni_filter={"enabled": True, "interfaces": ["lan"]}),
+    "appid sni": _with(app_control={"enabled": True, "observe_sni": True},
+                       xdp_sni_filter={"enabled": True, "interfaces": ["lan"]}),
+    "appid both": _with(adblocker=ADBLOCK, app_control={"enabled": True, "observe_sni": True},
+                        xdp_sni_filter={"enabled": True, "interfaces": ["lan"]}),
+    "dns servers": _with(dhcp={"lan": {"range_start": "10.0.0.100", "range_end": "10.0.0.200",
+                                       "dns_servers": ["9.9.9.9", "1.1.1.1", "10.0.0.1"]}}),
+    "quarantine time": _with(ai_ids={"enabled": True, "quarantine_duration_seconds": 604800}),
+}
+
+
+def test_view():
+    for name, raw in VIEW_CONFIGS.items():
+        try:
+            config = parse_config(copy.deepcopy(raw))
+        except Exception as exc:  # noqa: BLE001 -- an input the table got wrong
+            raise AssertionError(f"{name}: {exc}") from exc
+        _record({"op": "view", "name": name, "config": raw, "view": _view(config)})
+
+
+# --- fr-appid --------------------------------------------------------------------------------------------
+
+
+def _dns(client: str, name: str, qtype: str = "A", serial: int = 1) -> str:
+    return f"Nov 14 08:00:00 dnsmasq[123]: {serial} {client}/40000 query[{qtype}] {name} from {client}"
+
+
+def _sni(client: str, sni: str, action: str = "pass") -> str:
+    return json.dumps({"ts": T0, "action": action, "saddr": client, "sport": 40000,
+                       "daddr": "93.184.216.34", "dport": 443, "sni": sni})
+
+
+def _appid(name: str, config_name: str, steps, *, state: bytes | None = None) -> None:
+    config = parse_config(copy.deepcopy(VIEW_CONFIGS[config_name]))
+    clock = [T0]
+    case: dict = {"op": "appid", "name": name, "view": _view(config)["app_control"],
+                  "state": None if state is None else state.hex(), "steps": []}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "appid_usage.json"
+        if state is not None:
+            path.write_bytes(state)
+
+        def start():
+            return appid_daemon.AppIdDaemon(config, usage_path=path, clock=lambda: clock[0])
+
+        try:
+            d = start()
+        except Exception as exc:  # noqa: BLE001 -- what 1.x does is the point
+            case["crash"] = type(exc).__name__
+            path.unlink()
+            d = start()
+        handlers = dict(d.sources())
+        for kind, now, *args in steps:
+            clock[0] = now
+            if kind == "write":
+                d.write_snapshot()
+                case["steps"].append({"write": now, "file": path.read_text()})
+                continue
+            unit = appid_daemon.XDP_LOGGER_UNIT if kind == "sni" else f"{paths.ADBLOCK_DNS_SERVICE_NAME}.service"
+            handler = handlers.get(unit)
+            if handler is not None:  # a source the config doesn't follow isn't read
+                handler(args[0])
+            case["steps"].append({kind: args[0], "now": now})
+    _record(case)
+
+
+def test_appid():
+    both = [
+        ("dns", T0, _dns("10.0.0.5", "www.netflix.com")),
+        ("dns", T0 + 1, _dns("10.0.0.5", "www.netflix.com", "AAAA")),
+        ("dns", T0 + 2, _dns("10.0.0.5", "WWW.NETFLIX.COM", "HTTPS")),
+        ("dns", T0 + 11, _dns("10.0.0.5", "www.netflix.com")),
+        ("dns", T0 + 12, _dns("10.0.0.6", "nflxvideo.net", "PTR")),
+        ("dns", T0 + 13, _dns("10.0.0.6", "api.spotify.com")),
+        ("dns", T0 + 14, "not a query line"),
+        ("sni", T0 + 15, _sni("10.0.0.5", "www.netflix.com")),
+        ("sni", T0 + 16, _sni("10.0.0.7", "open.spotify.com", "drop")),
+        ("sni", T0 + 17, _sni("10.0.0.7", "open.spotify.com", "other")),
+        ("sni", T0 + 18, "{not json"),
+        ("sni", T0 + 19, _sni("", "www.netflix.com")),
+        ("sni", T0 + 20, json.dumps([1, 2])),
+        ("write", T0 + 30),
+        ("dns", T0 + 3700, _dns("fd00::5", "www.youtube.com")),
+        ("write", T0 + 3730),
+        ("write", T0 + 25 * 3600 + 30),
+    ]
+    _appid("both sources", "appid both", both)
+    _appid("dns only", "appid dns", both)
+    _appid("sni only", "appid sni", both)
+    _appid("no sources", "appid off", both[:3] + [("write", T0 + 30)])
+
+    good = None
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "u.json"
+        clock = [T0 - 600]
+        d = appid_daemon.AppIdDaemon(parse_config(copy.deepcopy(VIEW_CONFIGS["appid both"])), usage_path=path,
+                                     clock=lambda: clock[0])
+        d.handle_dns_log_line(_dns("10.0.0.5", "www.netflix.com"))
+        d.handle_sni_event_line(_sni("10.0.0.8", "open.spotify.com"))
+        d.write_snapshot()
+        good = path.read_bytes()
+    states = {
+        "good": good,
+        "empty": b"",
+        "not json": b"{oops",
+        "a list": b"[]",
+        "apps a list": b'{"apps": []}',
+        "not utf-8": b'{"apps": {"\xff": {}}}',
+        "huge int": b'{"apps": {"netflix": {"10.0.0.5": {"first_seen": 1e400, "last_seen": 1, "buckets": {}}}}}',
+        "bad row": b'{"apps": {"netflix": {"10.0.0.5": {"first_seen": "x"}, "10.0.0.6": 5}}}',
+    }
+    for label, state in states.items():
+        _appid(f"state {label}", "appid both", [("dns", T0, _dns("10.0.0.9", "www.netflix.com")),
+                                                ("write", T0 + 30)], state=state)
+
+
+# --- fr-ai-ids -------------------------------------------------------------------------------------------
+
+
+ROUTE = (
+    "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+    "eth0\t00000000\t010200C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+    "eth1\t0000000A\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+)
+RESOLV = "# generated\nnameserver 192.0.2.53\nnameserver ::1\nnameserver bogus\nsearch lan\n"
+
+
+def _flows(*flows) -> bytes:
+    return (json.dumps({"ok": True, "flows": list(flows)}) + "\n").encode()
+
+
+def _flow(src: str, dst: str, dport: int = 443, sport: int = 40000, mac: str | None = None,
+          proto: str = "tcp") -> dict:
+    flow = {"proto": proto, "src": src, "sport": sport, "dst": dst, "dport": dport}
+    if mac is not None:
+        flow["src_mac"] = mac
+    return flow
+
+
+def _scan(src: str, n: int, base: int = 0, mac: str | None = None) -> bytes:
+    """`n` new connections from `src` to `n` destinations."""
+    dst = (lambda i: f"2001:db8::{i + base + 1:x}") if ":" in src else (lambda i: f"198.51.100.{(i + base) % 250 + 1}")
+    return _flows(*[_flow(src, dst(i), sport=30000 + base + i, mac=mac) for i in range(n)])
+
+
+OK = b'{"ok": true}\n'
+
+
+def _aiids(name: str, config_name: str, steps, *, events: bytes | None = None, route: str = ROUTE,
+           resolv: str = RESOLV, window: float = 10.0) -> None:
+    """Steps: ("sni", now, line), ("dns", now, line), ("conntrack", now,
+    answer), ("evaluate", now, wall, [quarantine answers])."""
+    config = parse_config(copy.deepcopy(VIEW_CONFIGS[config_name]))
+    clock = [0.0]
+    wall = [T0]
+    calls: list[dict] = []
+    case: dict = {"op": "aiids", "name": name, "view": _view(config)["ai_ids"], "route": route,
+                  "resolv": resolv, "window": window,
+                  "events": None if events is None else events.hex(), "steps": []}
+    answers: list = []
+
+    def helper(call):
+        answer = answers.pop(0) if answers else OK
+        with FakeHelper(answer) as fake:
+            try:
+                return call()
+            finally:
+                calls.append({"answer": _answer_json(answer), "request": fake.request})
+
+    def quarantine(ip, duration):
+        return helper(lambda: helper_client.quarantine_ip(ip, duration, socket_path=SOCK))
+
+    def conntrack():
+        return helper(lambda: helper_client.conntrack_sample(socket_path=SOCK))
+
+    # The socket's directory is the TLS daemon's recording's, which its
+    # teardown removes when that module runs first.
+    SOCK_DIR.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "route").write_text(route)
+        (tmp / "resolv.conf").write_text(resolv)
+        events_path = tmp / "ai_ids_events.json"
+        if events is not None:
+            events_path.write_bytes(events)
+        d = ids_daemon.IDSDaemon(
+            config, engine=AnomalyEngine(window_seconds=window), quarantine_fn=quarantine,
+            conntrack_fn=conntrack, events_path=events_path, clock=lambda: clock[0],
+            adblock_category_dir=paths.ADBLOCK_CATEGORY_DIR, route_path=tmp / "route",
+            resolv_path=tmp / "resolv.conf",
+        )
+        real_time = ids_daemon.time.time
+        ids_daemon.time.time = lambda: wall[0]
+        try:
+            for kind, now, *args in steps:
+                clock[0] = now
+                out: dict = {"now": now}
+                start = len(calls)
+                printed = io.StringIO()
+                if kind == "conntrack":
+                    answers[:] = [args[0]]
+                    out["conntrack"] = _answer_json(args[0])
+                elif kind == "evaluate":
+                    wall[0] = args[0]
+                    answers[:] = list(args[1])
+                    out["evaluate"] = True
+                    out["wall"] = args[0]
+                else:
+                    out[kind] = args[0]
+                try:
+                    with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+                        if kind == "sni":
+                            d.handle_sni_event_line(args[0])
+                        elif kind == "dns":
+                            d.handle_dns_log_line(args[0])
+                        elif kind == "conntrack":
+                            d.poll_conntrack_once()
+                        else:
+                            flagged = d.evaluate_and_enforce()
+                            out["flagged"] = [dataclasses.asdict(e) for e in flagged]
+                except Exception as exc:  # noqa: BLE001 -- 1.x dies here
+                    out["crash"] = type(exc).__name__
+                out["helper"] = calls[start:]
+                out["log"] = printed.getvalue()
+                if kind == "evaluate":
+                    out["file"] = events_path.read_bytes().hex() if events_path.exists() else None
+                case["steps"].append(out)
+                if "crash" in out:
+                    break
+        finally:
+            ids_daemon.time.time = real_time
+    _record(json.loads(_text(json.dumps(case))))
+
+
+def _blocks(src: str, n: int, at: float):
+    return [("sni", at + i * 0.1, _sni(src, "evil.test", "drop")) for i in range(n)]
+
+
+def test_aiids():
+    # SNI blocklist hits over the absolute floor; one excluded, one infrastructure.
+    steps = (
+        _blocks("10.0.0.5", 4, 1.0)
+        + _blocks("10.0.0.50", 4, 1.0)
+        + _blocks("10.0.0.1", 4, 1.0)
+        + _blocks("192.0.2.9", 4, 1.0)  # outside: never scored
+        + [("sni", 2.0, _sni("10.0.0.6", "evil.test", "pass")), ("sni", 2.1, "garbage")]
+        + [("evaluate", 11.0, T0 + 11, [OK, OK])]
+    )
+    _aiids("sni floor", "excluded with reservation", steps)
+    _aiids("sni floor, nothing excluded", "base", steps)
+    _aiids("helper refuses", "base", steps[:-1] + [("evaluate", 11.0, T0 + 11,
+                                                     [b'{"ok": false, "message": "no"}\n', b'{"ok": false}\n'])])
+    _aiids("helper unreachable", "base", steps[:-1] + [("evaluate", 11.0, T0 + 11, [None, "file"])])
+    _aiids("helper not json", "base", steps[:-1] + [("evaluate", 11.0, T0 + 11, [b"nope\n", b"\n"])])
+    _aiids("helper reply not an object", "base", steps[:-1] + [("evaluate", 11.0, T0 + 11, [b"[1]\n"])])
+
+    # Conntrack: a scan from one host, long-lived flows not counted twice.
+    scan = [("conntrack", 1.0, _scan("10.0.0.7", 80)), ("conntrack", 6.0, _scan("10.0.0.7", 80)),
+            ("conntrack", 7.0, _scan("10.0.0.7", 80, base=80)),
+            ("evaluate", 11.0, T0 + 11, [OK])]
+    _aiids("conntrack scan", "base", scan)
+    _aiids("conntrack scan, two lans", "two lans", [
+        ("conntrack", 1.0, _flows(*[_flow("10.0.5.9", f"198.51.100.{i}", sport=1000 + i) for i in range(1, 90)],
+                                  *[_flow("10.0.0.130", f"198.51.100.{i}", sport=2000 + i) for i in range(1, 90)],
+                                  _flow("192.0.2.2", "198.51.100.1"))),
+        ("evaluate", 11.0, T0 + 11, [OK, OK]),
+    ])
+    _aiids("conntrack answers", "base", [
+        ("conntrack", 1.0, b'{"ok": false, "message": "busy"}\n'),
+        ("conntrack", 2.0, None),
+        ("conntrack", 3.0, b"{bad\n"),
+        ("conntrack", 4.0, b'{"ok": true}\n'),
+        ("conntrack", 5.0, b'{"ok": true, "flows": "abc"}\n'),
+        ("conntrack", 6.0, b'{"ok": true, "flows": [1, null, {"src": "10.0.0.7"}, '
+                           b'{"proto": "tcp", "src": "10.0.0.7", "sport": "x", "dst": "a", "dport": 1}, '
+                           b'{"proto": "tcp", "src": 7, "sport": 1, "dst": "a", "dport": 1}, '
+                           b'{"proto": "tcp", "src": "10.0.0.7", "sport": 1.9, "dst": "a", "dport": "2"}]}\n'),
+        ("evaluate", 11.0, T0 + 11, []),
+    ])
+    _aiids("conntrack flows a number", "base", [("conntrack", 1.0, b'{"ok": true, "flows": 5}\n')])
+    _aiids("conntrack reply a list", "base", [("conntrack", 1.0, b"[]\n")])
+
+    # IPv6: scored by MAC, quarantined through its latest address.
+    mac = "02:00:00:00:00:0a"
+    _aiids("ipv6 by mac", "base", [
+        ("conntrack", 1.0, _scan("fd00::a", 40, mac=mac)),
+        ("conntrack", 2.0, _scan("fd00::b", 40, base=40, mac=mac.upper())),
+        ("conntrack", 3.0, _scan("fd00::c", 40, base=80)),
+        ("sni", 4.0, _sni("fd00::b", "evil.test", "drop")),
+        ("sni", 4.1, _sni("fd00:0::b", "evil.test", "drop")),
+        ("conntrack", 5.0, _flows(_flow("fd00::d", "2001:db8::1", mac="not a mac"),
+                                  _flow("fe80::1%eth1", "2001:db8::1", mac=mac))),
+        ("evaluate", 11.0, T0 + 11, [OK]),
+    ])
+    _aiids("ipv6 excluded by mac", "excluded upper case", [
+        ("conntrack", 1.0, _scan("fd00::a", 80, mac="11:22:33:44:55:66")),
+        ("evaluate", 11.0, T0 + 11, [OK]),
+    ])
+
+    # DNS: NXDOMAIN floods (DGA-looking and not) and threat-category answers.
+    rng = random.Random(4)
+    dga = ["".join(rng.choice("bcdfghjklmnpqrstvwxz0123456789") for _ in range(16)) + ".com" for _ in range(12)]
+    nx = [f"host{i}.example" for i in range(32)]
+    dns = (
+        [("dns", 1.0 + i * 0.01, f"{i} 10.0.0.8/5000 reply {n} is NXDOMAIN") for i, n in enumerate(dga)]
+        + [("dns", 2.0 + i * 0.01, f"Nov 14 08:00:00 dnsmasq[1]: {i} 10.0.0.9/5000 cached {n} is NXDOMAIN")
+           for i, n in enumerate(nx)]
+        + [("dns", 3.0 + i * 0.01, f"{i} 10.0.0.10/5000 {paths.ADBLOCK_CATEGORY_DIR}/malware.hosts bad{i}.example is 0.0.0.0")
+           for i in range(4)]
+        + [("dns", 3.5 + i * 0.01, f"{i} 10.0.0.11/5000 {paths.ADBLOCK_CATEGORY_DIR}/gambling.hosts ad{i}.example is ::")
+           for i in range(4)]
+        + [("dns", 4.0, "1 192.0.2.7/5000 reply x.example is NXDOMAIN"), ("dns", 4.1, "dnsmasq started"),
+           ("dns", 4.2, "config doh.canary is NXDOMAIN")]
+        + [("evaluate", 11.0, T0 + 11, [OK, OK, OK])]
+    )
+    _aiids("dns", "adblock", dns)
+    _aiids("dns, gambling only", "adblock gambling only", dns)
+
+    # The routing table and resolv.conf, read at each evaluation.
+    gw = _blocks("10.0.0.2", 4, 1.0) + _blocks("10.0.0.3", 4, 1.0) + [("evaluate", 11.0, T0 + 11, [OK, OK])]
+    route = ROUTE.replace("010200C0", "0200000A") + "eth0\t00000000\tzz\t0003\t0\n" + "short\n"
+    _aiids("gateway from route", "base", gw, route=route, resolv="nameserver 10.0.0.3\n")
+    _aiids("no route, no resolv", "base", gw, route="", resolv="")
+    _aiids("dhcp dns servers", "dns servers", _blocks("10.0.0.1", 4, 1.0) + [("evaluate", 11.0, T0 + 11, [OK])])
+
+    # The event log: kept to the last 50, whatever was there before.
+    old = json.dumps([{"ts": 1.5, "ip": f"10.0.0.{i}", "score": 1.0, "reasons": ["x"]} for i in range(49)]).encode()
+    for label, events in {"49 old": old, "not json": b"{x", "a dict": b'{"a": 1}', "empty": b"",
+                          "odd values": b'[1, "two", {"k": [1e5, -0.0, 1e300, NaN]}, {"\\u00e9": "\\ud800"}]'}.items():
+        _aiids(f"event log {label}", "base", _blocks("10.0.0.5", 4, 1.0) + _blocks("10.0.0.6", 4, 1.0)
+               + [("evaluate", 11.0, T0 + 11, [OK, OK])], events=events)
+    _aiids("event log not utf-8", "base", _blocks("10.0.0.5", 4, 1.0) + [("evaluate", 11.0, T0 + 11, [OK])],
+           events=b"[\xff]")
+
+    # Windows: baselines over several, then a burst.
+    steps = []
+    for w in range(8):
+        t = w * 10.0
+        steps.append(("conntrack", t + 1, _scan("10.0.0.12", 6, base=w * 6)))
+        steps.append(("evaluate", t + 10, T0 + t + 10, [OK]))
+    steps.append(("conntrack", 81.0, _scan("10.0.0.12", 120, base=60)))
+    steps.append(("evaluate", 90.0, T0 + 90, [OK]))
+    _aiids("baseline then burst", "base", steps)
+
+
+def teardown_module():
+    if SOCK.exists():
+        SOCK.unlink()
+    try:
+        SOCK_DIR.rmdir()
+    except OSError:
+        pass

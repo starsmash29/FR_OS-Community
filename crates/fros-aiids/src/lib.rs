@@ -10,6 +10,7 @@
 //! The inputs are log lines any LAN host can shape, so every function is
 //! total over its input (tests/props.rs).
 
+pub mod daemon;
 pub mod dga;
 pub mod engine;
 pub mod lines;

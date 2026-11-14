@@ -387,3 +387,44 @@ type XdpUserCase struct {
 
 // XdpUserCases loads testdata/reference/xdpuser.jsonl.
 func XdpUserCases() ([]XdpUserCase, error) { return load[XdpUserCase]("xdpuser.jsonl") }
+
+// SensordViewCase is what 1.x's fr-appid and fr-ai-ids take from a
+// config (sensord.jsonl, op "view"): the members of the sensors' view
+// apply.SensorView writes for them. The file's other ops are replayed
+// by crates/fros-appid and crates/fros-aiids.
+type SensordViewCase struct {
+	ID     string         `json:"id"`
+	Op     string         `json:"op"`
+	Name   string         `json:"name"`
+	Config jsontext.Value `json:"config"`
+	View   jsontext.Value `json:"view"`
+}
+
+// SensordViewCases is every "view" case of sensord.jsonl.
+func SensordViewCases() ([]SensordViewCase, error) {
+	f, err := os.Open(filepath.Join(Dir(), "sensord.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []SensordViewCase
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 0, 1<<20), 64<<20)
+	for n := 1; s.Scan(); n++ {
+		var head struct {
+			Op string `json:"op"`
+		}
+		if err := json.Unmarshal(s.Bytes(), &head); err != nil {
+			return nil, fmt.Errorf("sensord.jsonl:%d: %w", n, err)
+		}
+		if head.Op != "view" {
+			continue
+		}
+		var c SensordViewCase
+		if err := json.Unmarshal(s.Bytes(), &c, json.RejectUnknownMembers(true)); err != nil {
+			return nil, fmt.Errorf("sensord.jsonl:%d: %w", n, err)
+		}
+		out = append(out, c)
+	}
+	return out, s.Err()
+}

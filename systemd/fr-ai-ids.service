@@ -1,0 +1,53 @@
+[Unit]
+Description=FR_OS AI IDS/IPS anomaly detection daemon
+Documentation=https://github.com/starsmash29/FR_OS-Community
+After=fr-apply-helper.socket network.target
+Wants=fr-apply-helper.socket
+
+[Service]
+Type=simple
+# Parses what LAN hosts send, so it runs as fr_os-sensor from the start
+# and never as root: it reads the sensors' view of the config
+# (/etc/fr_os/sensor-view.json, which an apply writes; never config.yaml),
+# follows the XDP filter's event file and the resolver's query log,
+# readable through fr_os-feeds (ROADMAP SEC-4, SEC-11), and asks the
+# apply-helper for conntrack samples and quarantines over its socket
+# (fr_os-feeds too), where it may send only the sensor commands. It
+# writes only its event log, under /etc/fr_os/sensors. With
+# ai_ids.enabled off it exits, as 1.x does; a changed view restarts it.
+User=fr_os-sensor
+Group=fr_os-sensor
+SupplementaryGroups=fr_os-feeds
+ExecStart=/usr/libexec/fr_os/fr-ai-ids
+Restart=on-failure
+RestartSec=5
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go), as
+# 1.x's unit has it: no capability at all, Unix sockets only.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/etc/fr_os/sensors
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

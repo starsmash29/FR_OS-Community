@@ -172,6 +172,30 @@ func TestBPFReadersHoldOnlyWhatOpeningAMapAndDroppingRootTake(t *testing.T) {
 	}
 }
 
+// The log-reading sensor daemons run as fr_os-sensor from the start,
+// with no capability at all, read their logs through fr_os-feeds, talk
+// only to Unix sockets and write only under /etc/fr_os/sensors (as
+// 1.x's units for fr-appid and fr-ai-ids).
+func TestLogReadingSensorDaemonsHoldNothing(t *testing.T) {
+	for _, name := range []string{"fr-appid.service", "fr-ai-ids.service"} {
+		s := service(t, name)
+		for key, want := range map[string]string{"User": "fr_os-sensor", "Group": "fr_os-sensor",
+			"SupplementaryGroups": "fr_os-feeds", "CapabilityBoundingSet": "", "RestrictAddressFamilies": "AF_UNIX",
+			"ReadWritePaths": "-/etc/fr_os/sensors", "ProtectKernelTunables": "yes", "ProtectProc": "invisible",
+			"ExecStart": "/usr/libexec/fr_os/" + strings.TrimSuffix(name, ".service")} {
+			if got := last(s, key); got != want {
+				t.Errorf("%s: %s=%q, want %q", name, key, got, want)
+			}
+		}
+		if _, ok := s["AmbientCapabilities"]; ok {
+			t.Errorf("%s: ambient capabilities", name)
+		}
+		if !slices.Contains(s["SystemCallFilter"], "~@privileged") {
+			t.Errorf("%s: SystemCallFilter=%q, want ~@privileged too", name, s["SystemCallFilter"])
+		}
+	}
+}
+
 // The logger opens the event file as root, in a directory systemd makes
 // root:fr_os-feeds 0750, under a umask that leaves the file 0640: its
 // readers (fr_os-webui and fr_os-sensor, both in fr_os-feeds) read it,
