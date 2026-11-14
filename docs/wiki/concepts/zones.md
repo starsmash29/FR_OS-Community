@@ -37,10 +37,10 @@ Rules:
   only as a rule's destination (`to_zone: self`).
 
 A zone **faces the internet** when NAT masquerades out of it
-(`nat.masquerade[].out_zone`). Several defaults follow from that: the
-management ports are closed there, IPv6 LAN settings are not offered
-there, and the IoT "internet only" isolation means "only the zones that
-face the internet".
+(`nat.masquerade[].out_zone`), and a zone named `wan` always does. Several
+defaults follow from that: the management ports are closed there, and IPv6
+takes its prefix from there and never hands one out there. The IoT
+"internet only" isolation means "only the zones NAT masquerades out of".
 
 ## Interfaces
 

@@ -64,7 +64,7 @@ The web console (TCP 443) and SSH (TCP 22) are reachable only from the
 
 - the zones listed in `management.zones`, if any;
 - otherwise every zone that does not face the internet (a zone faces the
-  internet when NAT masquerades out of it).
+  internet when NAT masquerades out of it, or when it is named `wan`).
 
 These drops come before every rule you write, so a rule such as "allow 443
 from wan" cannot open the console to the internet. The only way to manage
