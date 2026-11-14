@@ -46,7 +46,7 @@ FIXED_NOW = 1793491200.0
 _raw_by_config: dict[int, object] = {}
 #: id(value) -> (value, text) for each value yaml.safe_load built.
 _text_by_value: dict[int, tuple[object, str]] = {}
-_cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}, "yaml": {}, "yaml_config": {}, "helper": {}, "render": {}, "apply": {}, "webui": {}, "qr": {}, "tlsfp": {}, "appid": {}, "aiids": {}, "iot": {}, "xdp": {}, "xdpuser": {}, "tlsfpd": {}, "sensord": {}}
+_cases: dict[str, dict[str, dict]] = {"config": {}, "ruleset": {}, "yaml": {}, "yaml_config": {}, "helper": {}, "render": {}, "apply": {}, "webui": {}, "qr": {}, "tlsfp": {}, "appid": {}, "aiids": {}, "iot": {}, "xdp": {}, "xdpuser": {}, "tlsfpd": {}, "sensord": {}, "netdetect": {}}
 _skipped = {"config_not_json": 0, "ruleset_unknown_config": 0, "ruleset_not_json": 0, "yaml_not_text": 0}
 
 

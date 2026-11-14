@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,13 +21,14 @@ import (
 // an apply from the console, validate and render, the hourly schedule
 // check (fr-schedule-check.timer), the DNS query log trim
 // (fr-dns-log-trim.timer), the ad-block refresh
-// (fr-adblock-refresh.timer) and ensure-accounts (fr-accounts.service).
-// Each prints what 1.x prints and exits as it does.
+// (fr-adblock-refresh.timer), ensure-accounts (fr-accounts.service), and
+// first boot's (firstboot.go). Each prints what 1.x prints and exits as
+// it does.
 
 // cliUsage is what a command line firewall-cli can't read gets, with
 // exit status 2 (argparse's). It is 2.x's own: 1.x lists the commands
 // it has (decisions.md, "phase 4f-1").
-const cliUsage = `usage: firewall-cli {validate,render,apply,schedule-check,dns-log-trim,adblock-refresh,ensure-accounts} ...
+const cliUsage = `usage: firewall-cli COMMAND ...
 
   validate [CONFIG]                 check a config file
   render [CONFIG]                   print the nftables ruleset it builds
@@ -36,6 +39,19 @@ const cliUsage = `usage: firewall-cli {validate,render,apply,schedule-check,dns-
   adblock-refresh [CONFIG] [--scheduled]
                                     fetch the ad-block lists
   ensure-accounts                   create FR_OS's accounts and state directories
+  detect-interfaces [--include-virtual]
+                                    list the network ports
+  detect-wan-lan                    pick the WAN and LAN ports (first boot; root)
+  assign-interfaces --wan DEVICE --lan DEVICE [--opt ZONE:DEVICE]... [--hostname NAME]
+                    [--lan-address ADDRESS/PREFIX] [--out FILE] [--force]
+                                    write a minimal config for the ports
+  set-admin-password [--username NAME] [--generate [--show-on-console]]
+                                    create or reset a webUI admin account
+  mfa-reset USERNAME                remove a webUI account's second factors
+  initial-password                  take the generated password off the console once changed
+  console-ports [--print] [--watch] show the ports on the console's login screen
+  persistence status | auto [--reboot] | create DISK [--wipe] [--yes]
+                                    keep a live-booted router's state across reboots
 
 CONFIG defaults to /etc/fr_os/config.yaml.
 `
@@ -46,6 +62,12 @@ type cliCommand struct {
 	config  bool     // takes the optional CONFIG
 	flags   []string // its switches
 	numbers []string // its options taking an integer
+	values  []string // its options taking a value
+	appends []string // its options taking a value, repeatable
+	// required are the options it must have; positional the values it
+	// takes in order, all required.
+	required, positional []string
+	defaults             map[string]string
 }
 
 var cliCommands = []cliCommand{
@@ -56,6 +78,20 @@ var cliCommands = []cliCommand{
 	{name: "dns-log-trim"},
 	{name: "adblock-refresh", config: true, flags: []string{"--scheduled"}},
 	{name: "ensure-accounts"},
+	{name: "detect-interfaces", flags: []string{"--include-virtual"}},
+	{name: "detect-wan-lan"},
+	{name: "assign-interfaces", flags: []string{"--force"},
+		values: []string{"--wan", "--lan", "--hostname", "--lan-address", "--out"}, appends: []string{"--opt"},
+		required: []string{"--wan", "--lan"},
+		defaults: map[string]string{"--hostname": "fr-router", "--lan-address": apply.DefaultLANAddress}},
+	{name: "set-admin-password", flags: []string{"--generate", "--show-on-console"}, values: []string{"--username"},
+		defaults: map[string]string{"--username": "admin"}},
+	{name: "mfa-reset", positional: []string{"username"}},
+	{name: "initial-password"},
+	{name: "console-ports", flags: []string{"--print", "--watch"}},
+	{name: "persistence status"},
+	{name: "persistence auto", flags: []string{"--reboot"}},
+	{name: "persistence create", flags: []string{"--wipe", "--yes"}, positional: []string{"disk"}},
 }
 
 type cliArgs struct {
@@ -63,6 +99,10 @@ type cliArgs struct {
 	config  string
 	flags   map[string]bool
 	numbers map[string]*int64
+	values  map[string]string
+	appends map[string][]string
+	// positional are the command's values by name.
+	positional map[string]string
 }
 
 type usageError string
@@ -90,37 +130,54 @@ func option(arg string, names []string) (string, error) {
 	return "", usageError("ambiguous option: " + arg)
 }
 
+// negativeNumber is what argparse takes as a value although it starts
+// with "-" (no option of firewall-cli looks like one).
+var negativeNumber = regexp.MustCompile(`\A-\d+\z|\A-\d*\.\d+\z`)
+
 func parseCLI(args []string, defaultConfig string) (*cliArgs, error) {
 	if len(args) == 0 {
 		return nil, usageError("the following arguments are required: command")
 	}
+	name := args[0]
+	rest := args[1:]
+	if name == "persistence" {
+		if len(rest) == 0 {
+			return nil, usageError("the following arguments are required: persistence_command")
+		}
+		name, rest = name+" "+rest[0], rest[1:]
+	}
 	var cmd *cliCommand
 	for i := range cliCommands {
-		if cliCommands[i].name == args[0] {
+		if cliCommands[i].name == name {
 			cmd = &cliCommands[i]
 		}
 	}
 	if cmd == nil {
 		return nil, usageError("invalid choice: " + strconv.Quote(args[0]))
 	}
-	a := &cliArgs{command: cmd.name, config: defaultConfig, flags: map[string]bool{}, numbers: map[string]*int64{}}
-	names := append(append([]string{}, cmd.flags...), cmd.numbers...)
-	positional := 0
+	a := &cliArgs{command: cmd.name, config: defaultConfig, flags: map[string]bool{}, numbers: map[string]*int64{},
+		values: map[string]string{}, appends: map[string][]string{}, positional: map[string]string{}}
+	for k, v := range cmd.defaults {
+		a.values[k] = v
+	}
+	names := slices.Concat(cmd.flags, cmd.numbers, cmd.values, cmd.appends)
+	seen := map[string]bool{}
+	configs := 0
 	onlyPositional := false
-	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
 		arg := rest[i]
 		if !onlyPositional && arg == "--" {
 			onlyPositional = true
 			continue
 		}
-		if !onlyPositional && strings.HasPrefix(arg, "-") && arg != "-" {
-			name, value, hasValue := strings.Cut(arg, "=")
-			opt, err := option(name, names)
+		if !onlyPositional && strings.HasPrefix(arg, "-") && arg != "-" && !negativeNumber.MatchString(arg) {
+			opt, value, hasValue := strings.Cut(arg, "=")
+			opt, err := option(opt, names)
 			if err != nil {
 				return nil, err
 			}
-			if !containsString(cmd.numbers, opt) {
+			seen[opt] = true
+			if slices.Contains(cmd.flags, opt) {
 				if hasValue {
 					return nil, usageError("argument " + opt + ": ignored explicit argument " + strconv.Quote(value))
 				}
@@ -128,35 +185,49 @@ func parseCLI(args []string, defaultConfig string) (*cliArgs, error) {
 				continue
 			}
 			if !hasValue {
-				if i+1 >= len(rest) {
+				next := ""
+				if i+1 < len(rest) {
+					next = rest[i+1]
+				}
+				if i+1 >= len(rest) || (strings.HasPrefix(next, "-") && next != "-" && !negativeNumber.MatchString(next)) {
 					return nil, usageError("argument " + opt + ": expected one argument")
 				}
 				i++
-				value = rest[i]
+				value = next
 			}
-			n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-			if err != nil {
-				return nil, usageError("argument " + opt + ": invalid int value: " + strconv.Quote(value))
+			switch {
+			case slices.Contains(cmd.numbers, opt):
+				n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+				if err != nil {
+					return nil, usageError("argument " + opt + ": invalid int value: " + strconv.Quote(value))
+				}
+				a.numbers[opt] = &n
+			case slices.Contains(cmd.appends, opt):
+				a.appends[opt] = append(a.appends[opt], value)
+			default:
+				a.values[opt] = value
 			}
-			a.numbers[opt] = &n
 			continue
 		}
-		if !cmd.config || positional == 1 {
+		switch {
+		case len(a.positional) < len(cmd.positional):
+			a.positional[cmd.positional[len(a.positional)]] = arg
+		case cmd.config && configs == 0:
+			a.config = arg
+			configs++
+		default:
 			return nil, usageError("unrecognized arguments: " + arg)
 		}
-		a.config = arg
-		positional++
 	}
-	return a, nil
-}
-
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
+	for _, r := range cmd.required {
+		if !seen[r] {
+			return nil, usageError("the following arguments are required: " + r)
 		}
 	}
-	return false
+	if len(a.positional) < len(cmd.positional) {
+		return nil, usageError("the following arguments are required: " + cmd.positional[len(a.positional)])
+	}
+	return a, nil
 }
 
 // CLI runs firewall-cli with args (without the program's name), printing
@@ -269,6 +340,9 @@ func (c *cli) run(a *cliArgs) (int, error) {
 		}
 		c.println("fr-accounts: accounts and state directories in place")
 		return 0, nil
+	}
+	if code, ok, err := c.firstBoot(a); ok {
+		return code, err
 	}
 	return 2, nil
 }

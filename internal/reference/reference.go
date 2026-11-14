@@ -183,13 +183,15 @@ func RenderCases() ([]RenderCase, error) { return load[RenderCase]("render.jsonl
 // (Hex when it isn't UTF-8, SHA256 and Len when it is large). A nil
 // entry under a name ending in "/" is an empty directory.
 type ApplyFile struct {
-	Mode   string  `json:"mode"`
+	Mode   string  `json:"mode,omitempty"`
 	Text   *string `json:"text,omitempty"`
 	Hex    string  `json:"hex,omitempty"`
 	SHA256 string  `json:"sha256,omitempty"`
 	Len    int     `json:"len,omitempty"`
 	// Size is a setup file of that many zero bytes (written sparse).
 	Size int64 `json:"size,omitempty"`
+	// Link is a symbolic link's target (never followed).
+	Link string `json:"link,omitempty"`
 }
 
 // ApplyAnswer is what a program says: the first entry whose Argv is a
@@ -446,3 +448,19 @@ func SensordViewCases() ([]SensordViewCase, error) {
 	}
 	return out, s.Err()
 }
+
+// NetdetectCase is one of 1.x's frfw.netdetect answers (netdetect.jsonl):
+// op "offer" is the network a DHCP answer frame offers for the xid (nil:
+// none), op "discover" the DHCPDISCOVER frame it sends from a MAC.
+type NetdetectCase struct {
+	ID      string  `json:"id"`
+	Op      string  `json:"op"`
+	Frame   string  `json:"frame"`
+	XID     uint32  `json:"xid"`
+	Network *string `json:"network"`
+	MAC     string  `json:"mac"`
+	IPID    uint16  `json:"ip_id"`
+}
+
+// NetdetectCases loads testdata/reference/netdetect.jsonl.
+func NetdetectCases() ([]NetdetectCase, error) { return load[NetdetectCase]("netdetect.jsonl") }

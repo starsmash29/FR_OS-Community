@@ -789,3 +789,59 @@ the setup's config as each implementation computes its own.
   here) and another order of the XDP blocklist's keys (Python's hash
   seed); the recorder's other cases came out the same, so they were
   kept as they are.
+
+## 2026-11-14: first boot's commands (phase 4f-2a)
+
+The `firewall-cli` commands first boot and its units run, held to 1.x's
+`frfw.cli`: `detect-interfaces`, `detect-wan-lan` (with each port's DHCP
+probe, SEC-8, and the LAN address out of the offered network's way,
+NET-12), `assign-interfaces`, `set-admin-password` (`--generate`,
+`--show-on-console`, or by hand), `mfa-reset`, `initial-password`,
+`console-ports` (`--print`, `--watch`, or a refresh) and `persistence
+status|auto|create`. `reference/test_fros_apply_cases.py` records them
+as `cli/first boot/...` sessions against the fake system: a sysfs tree
+of ports and block devices (setup entries `{"link": target}` are
+symbolic links, and the tree records them so, never followed), the
+programs' answers (`ip`, `agetty`, `blkid`, `sfdisk`, `blockdev`,
+`mkfs.ext4`, `mount`, ...) from the table, each DHCP probe as the
+pseudo-call `["dhcp-offer", device]` (its output the network offered,
+none for no answer), and a step's password prompts answered from its
+`passwords`. `reference/test_fros_netdetect_cases.py` records the probe's
+frames (`netdetect.jsonl`): the DHCPDISCOVER 1.x sends, byte for byte,
+and the network it reads from offers built, masked every way and
+damaged at random; `apply/reference_netdetect_test.go` replays them, and
+`apply/netdetect_root_test.go` sends the real probe over a veth to a
+responder, as root, in a network namespace of its own.
+
+- **Where 1.x dies with a traceback, 2.x exits 1 with a line saying
+  what (as in phase 4f-1).** Cases: `cli/first boot/wan/lan, the
+  upstream everywhere` (no LAN address left outside 0.0.0.0/0),
+  `cli/first boot/admin password, by hand` (the end of input at the
+  prompt, Python's EOFError), `cli/first boot/persistence, no size`
+  (blockdev printed nothing).
+- **The persistence filesystem's mount point is removed only when
+  empty.** 1.x mounts it in a `tempfile.TemporaryDirectory`, whose
+  cleanup is `shutil.rmtree`: had the `umount` failed, it would have
+  deleted what it just wrote on the new filesystem. 2.x removes the
+  empty directory alone. No recorded case changes: the mount point is in
+  the temporary directory, outside the case's tree.
+- **The ports' DHCP probes are compared as a set.** 1.x asks every port
+  at once (a thread pool), and so does 2.x (a goroutine each); the
+  recording ran them in order, one after another, so the replay puts
+  each run of `["dhcp-offer", device]` calls in device order before
+  comparing. Every other call keeps its place.
+- **The recording appends the `cli/first boot/` cases to the committed
+  ones**, for the reason phase 4f-1 gives.
+
+The scripts first boot runs, `scripts/fr-first-boot.sh` and
+`scripts/install-system-integration.sh`, stay shell, line for line
+1.x's, with firewall-cli from `/usr/libexec/fr_os`; they start only the
+units 2.x has (the update and kernel units come with phases 4f-3 and
+4f-4), and the integration script writes no OpenSSL PQC fragment
+(fr-webui sets no `OPENSSL_CONF`). The new units
+(`fr-first-boot.service`, `fr-persistence-setup.service`,
+`fr-initial-password.path` and `.service`, `fr-console-ports.service`)
+hold the sandbox `systemd/sandbox_test.go` checks; two exceptions are
+named there with their reason: `fr-persistence-setup.service` sees the
+devices (it partitions the boot medium), and `fr-first-boot.service` may
+open a packet socket (the DHCP probe).

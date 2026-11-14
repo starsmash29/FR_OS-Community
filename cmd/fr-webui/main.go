@@ -171,7 +171,7 @@ func certificateNames(cfg *config.Config) ([]string, []string) {
 // any apply recorded them, config.yaml's; without a readable config,
 // loopback only -- the console is the way in then, not the network.
 func listenAddresses(cfg *config.Config, record string) []string {
-	if recorded := recordedListen(record); recorded != nil {
+	if recorded := apply.RecordedWebUIListen(record); recorded != nil {
 		for _, a := range recorded {
 			if a == anyAddress {
 				fmt.Fprintf(os.Stderr, "fr-webui: WARNING: %s\n", wanWarning)
@@ -187,38 +187,6 @@ func listenAddresses(cfg *config.Config, record string) []string {
 	}
 	system := &apply.System{Paths: apply.DefaultPaths()}
 	return system.ListenAddresses(cfg)
-}
-
-// recordedListen is 1.x's management.recorded_webui_listen: the
-// recorded addresses, each as ipaddress.ip_address writes it, or nil
-// when there is no record or it is not one.
-func recordedListen(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	v, err := config.ParseJSONLastWins(data)
-	if err != nil {
-		return nil
-	}
-	m, ok := v.(*config.Map)
-	if !ok {
-		return nil
-	}
-	raw, _ := m.Get("addresses")
-	list, ok := raw.([]config.Value)
-	if !ok || len(list) == 0 {
-		return nil
-	}
-	var out []string
-	for _, a := range list {
-		addr, err := config.ParsePyIP(a)
-		if err != nil {
-			return nil
-		}
-		out = append(out, addr.String())
-	}
-	return out
 }
 
 // bind is one listening socket per address. IP_FREEBIND lets it bind an

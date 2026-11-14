@@ -1,0 +1,42 @@
+[Unit]
+Description=FR_OS first-boot setup (interface assignment, admin password, service enablement)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+After=network-pre.target fr-persistence-setup.service fr-accounts.service
+ConditionPathExists=!/etc/fr_os/.first-boot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/fr_os/fr-first-boot.sh
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root, once per machine: writes /etc (the accounts, the config, the
+# console's password file, the WAN port's DHCP client) and asks systemd
+# to start every FR_OS unit, each in its own sandbox. detect-wan-lan
+# asks each port for a DHCP offer before anything is configured on it:
+# on a packet socket (AF_PACKET, CAP_NET_RAW), after setting the port up
+# (CAP_NET_ADMIN). Nothing else of the network.
+ProtectSystem=strict
+ReadWritePaths=/etc -/var/log/fr_os -/var/log/fr_os-sni -/var/log/fr_os-dns -/run/fr_os
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_AUDIT_WRITE
+
+[Install]
+WantedBy=multi-user.target

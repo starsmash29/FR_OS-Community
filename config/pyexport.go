@@ -202,3 +202,28 @@ func CheckHostname(s string) error {
 
 // ValidZoneName is zoneinfo.ZoneInfo(name) succeeding.
 func ValidZoneName(name string) bool { return validZoneName(name) }
+
+// PySplitlinesKeepends is str.splitlines(keepends=True): each line with
+// its boundary, \r\n as one.
+func PySplitlinesKeepends(s string) []string {
+	var lines []string
+	rs := []rune(s)
+	start := 0
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '\n', '\v', '\f', '\x1c', '\x1d', '\x1e', '\u0085', ' ', ' ':
+		case '\r':
+			if i+1 < len(rs) && rs[i+1] == '\n' {
+				i++
+			}
+		default:
+			continue
+		}
+		lines = append(lines, string(rs[start:i+1]))
+		start = i + 1
+	}
+	if start < len(rs) {
+		lines = append(lines, string(rs[start:]))
+	}
+	return lines
+}

@@ -107,6 +107,9 @@ class _Fake:
         #: changed by useradd, groupadd, usermod and gpasswd; None is no
         #: account at all.
         self.accounts: dict | None = None
+        #: What the console types at the step's password prompts
+        #: (getpass.getpass), in order; none left is the end of input.
+        self.passwords: list[str] = []
         self.active = False
         allowed = {str(root), os.path.realpath(root), "/dev/null", "/dev/urandom", "/usr/share/zoneinfo",
                    "/usr/share/locale", "/usr/local/share/locale",  # argparse's gettext
@@ -286,12 +289,63 @@ def system(monkeypatch, tmp_path):
     # Every module an apply uses is imported before the paths are moved:
     # one first imported during a session would keep the router's paths.
     from frfw import accounts, cli, provision, rule_hits, schedule_refresh, xdp  # noqa: F401
+    from frfw import admin_account, console_ports, initial_password, netdetect, persistence, skeleton  # noqa: F401
     from frfw.adblock import dns_service  # noqa: F401
     from frfw.helper import server  # noqa: F401
     from frfw.webui import audit  # noqa: F401
 
     _reroot(monkeypatch, root)
     monkeypatch.setattr(accounts, "NOLOGIN", "/usr/sbin/nologin")  # a shell's name, not a file it opens
+    # Where live-boot mounts things, compared with /proc/mounts' lines.
+    monkeypatch.setattr(persistence, "LIVE_MEDIUM_MOUNT", "/run/live/medium")
+    monkeypatch.setattr(persistence, "LIVE_PERSISTENCE_PREFIX", "/run/live/persistence/")
+
+    # The device nodes persistence looks for (a partition that appeared)
+    # are under the root too; the names on the command lines stay /dev/.
+    def dev_path(*parts):
+        p = Path(*parts)
+        return root / str(p).lstrip("/") if str(p).startswith("/dev/") else p
+
+    monkeypatch.setattr(persistence, "Path", dev_path)
+
+    # First boot's DHCP probe, as a call ["dhcp-offer", device] whose
+    # stdout is the network offered (none: no server answered); the
+    # ports are asked one after the other, so the calls come in order.
+    import ipaddress
+
+    def dhcp_offer(device, **kwargs):
+        proc = state["fake"].run(["dhcp-offer", device], text=True)
+        if proc.returncode or not proc.stdout.strip():
+            return None
+        return ipaddress.IPv4Network(proc.stdout.strip())
+
+    class Serial:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def map(self, fn, items):
+            return [fn(i) for i in items]
+
+    monkeypatch.setattr(netdetect, "dhcp_offer", dhcp_offer)
+    # The port summary's programs are bound as default arguments.
+    for fn in (console_ports.ipv4_addresses, console_ports.redraw_consoles):
+        monkeypatch.setattr(fn, "__defaults__", (lambda *a, **k: state["fake"].run(*a, **k),))
+    monkeypatch.setattr(netdetect, "ThreadPoolExecutor", Serial)
+    import getpass
+
+    def ask(prompt="Password: ", stream=None):
+        fake = state["fake"]
+        if not fake.passwords:
+            raise EOFError
+        return fake.passwords.pop(0)
+
+    monkeypatch.setattr(getpass, "getpass", ask)
     from frfw import management
 
     monkeypatch.setattr(management, "ssh_login_users", management.ssh_login_users)  # each session sets it
@@ -346,6 +400,9 @@ def system(monkeypatch, tmp_path):
     monkeypatch.setattr("time.time", lambda: NOW)
     monkeypatch.setattr(frfw_apply, "datetime", _FixedDatetime)
     monkeypatch.setattr(apply_confirm.secrets, "token_hex", lambda n=32: state["fake"].bytes(n).hex())
+    # The generated admin password and its salt (secrets.token_urlsafe
+    # draws from token_bytes).
+    monkeypatch.setattr(admin_account.secrets, "token_bytes", lambda n=32: state["fake"].bytes(n))
     monkeypatch.setattr(ipv6.secrets, "randbits",
                         lambda k: int.from_bytes(state["fake"].bytes((k + 7) // 8), "big") >> (-k % 8))
     import base64
@@ -409,8 +466,15 @@ def _snapshot(root: Path, max_text: int = MAX_TEXT) -> dict:
         rel = os.path.relpath(dirpath, root)
         if not filenames and not dirnames:
             files[rel + "/"] = None
+        for name in sorted(dirnames + filenames):
+            path = Path(dirpath) / name
+            if path.is_symlink():  # {"link": target}, never followed
+                files[os.path.relpath(path, root)] = {"link": _rooted(os.readlink(path), str(root))}
+        dirnames[:] = [d for d in dirnames if not (Path(dirpath) / d).is_symlink()]
         for name in sorted(filenames):
             path = Path(dirpath) / name
+            if path.is_symlink():
+                continue
             data = path.read_bytes()
             entry: dict = {"mode": oct(path.stat().st_mode & 0o7777)}
             try:
@@ -435,6 +499,7 @@ def _rooted(value, root: str):
         tmp = tempfile.gettempdir()
         value = value.replace(root, "@ROOT@")
         value = re.sub(re.escape(tmp) + r"/tmp[A-Za-z0-9_]+", "@TMP@/tmp*", value)
+        value = re.sub(re.escape(tmp) + r"/fros-persistence-[A-Za-z0-9_]+", "@TMP@/fros-persistence-*", value)
         return value.replace(tmp + "/", "@TMP@/")
     if isinstance(value, list):
         return [_rooted(v, root) for v in value]
@@ -480,6 +545,9 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
             path.mkdir(parents=True, exist_ok=True)
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, dict) and "link" in content:  # {"link": target}: a symlink
+            os.symlink(content["link"], path)
+            continue
         if isinstance(content, dict):  # {"size": n}: n zero bytes, sparse
             with open(path, "wb") as f:
                 f.truncate(content["size"])
@@ -487,7 +555,7 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
         path.write_text(content.replace(FINGERPRINT, fp))
     before = _snapshot(root, max_text=1 << 20)  # in full: the replay writes it
     for rel, content in setup.items():
-        if isinstance(content, dict):
+        if isinstance(content, dict) and "size" in content:
             before[rel] = {"mode": before[rel]["mode"], "size": content["size"]}
         elif isinstance(content, str) and FINGERPRINT in content:
             before[rel]["text"] = before[rel]["text"].replace(fp, FINGERPRINT)
@@ -509,6 +577,7 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
             if "wait" in request:  # fr-apply-revert.service, request["wait"] s later
                 reply = {"messages": _wait(server, request["wait"])}
             elif "cli" in request:  # firewall-cli, its argv with the root as "@ROOT@"
+                fake.passwords = list(request.get("passwords", []))
                 reply = _cli([a.replace("@ROOT@", str(root)) for a in request["cli"]])
             else:
                 reply = helper_server._handle_request(copy.deepcopy(request), server)
@@ -1913,3 +1982,297 @@ ACCOUNT_SESSIONS = {
 def test_cli_accounts(system, name):
     setup, accounts, table = ACCOUNT_SESSIONS[name]
     _session(system, f"cli/accounts/{name}", setup, [_c("ensure-accounts")], table, RANDOM, accounts=accounts)
+
+
+# --- first boot (phase 4f-2) --------------------------------------------------------
+#
+# The commands fr-first-boot.sh and its units run: the ports (sysfs under
+# the root; the DHCP probe a ["dhcp-offer", device] call), the skeleton
+# config, the generated admin password and the console's files, the port
+# summary, and live-boot persistence (/proc/cmdline, /proc/mounts and
+# /sys/class/block under the root, the disk tools from the table).
+
+def _port(name: str, mac: str | None = "52:54:00:12:34:56", carrier: str | None = "1", speed: str | None = "1000",
+          driver: str | None = "e1000e") -> dict:
+    files: dict = {f"sys/class/net/{name}/": ""}
+    if mac is not None:
+        files[f"sys/class/net/{name}/address"] = mac + "\n"
+    if carrier is not None:
+        files[f"sys/class/net/{name}/carrier"] = carrier + "\n"
+    if speed is not None:
+        files[f"sys/class/net/{name}/speed"] = speed + "\n"
+    if driver is not None:
+        files[f"sys/class/net/{name}/device/driver"] = {"link": f"../../../../bus/pci/drivers/{driver}"}
+        files[f"sys/bus/pci/drivers/{driver}/"] = ""
+    return files
+
+
+PORTS = {**_port("eth0", "52:54:00:00:00:01"), **_port("eth1", "52:54:00:00:00:02", speed="100", driver="r8169"),
+         **_port("eth2", "52:54:00:00:00:03", carrier="0", speed="-1"),
+         **_port("lo", "00:00:00:00:00:00", speed=None, driver=None),
+         **_port("veth9", "aa:00:00:00:00:09", driver=None), **_port("wg0", None, carrier=None, speed=None, driver=None),
+         **_port("enp3s0", "52:54:00:00:00:04", carrier=None, speed="2500", driver=None)}
+TWO_PORTS = {**_port("eth0", "52:54:00:00:00:01", carrier="0"), **_port("eth1", "52:54:00:00:00:02")}
+
+
+def _offer(device: str, network: str | None) -> dict:
+    return {"argv": ["dhcp-offer", device], "stdout": (network or "") + "\n"}
+
+
+#: A hash of PASSWORD with a fixed salt, as admin_account writes them.
+PASSWORD = "Pw-first-boot-1234"
+_SALT = bytes(range(16))
+
+
+def _hash(password: str) -> str:
+    digest = hashlib.scrypt(password.encode(), salt=_SALT, n=2**15, r=8, p=3, maxmem=256 * 1024 * 1024, dklen=32)
+    return f"scrypt${2**15}$8$3${_SALT.hex()}${digest.hex()}"
+
+
+def _auth(**users) -> str:
+    return json.dumps({"version": 2, "users": users}, indent=1)
+
+
+AUTH = "etc/fr_os/webui/auth.json"
+ISSUE = "etc/issue.d/fr_os-initial-admin.issue"
+SHOWN = f"FR_OS: initial webUI admin login is 'admin' / '{PASSWORD}'\n" \
+        "It disappears from this screen once you change it in the webUI.\n\n"
+LEGACY = ("Debian GNU/Linux 12 \\n \\l\n\nFR_OS: initial webUI admin login is 'admin' / 'Legacy-pass-9876'\n"
+          "webUI: https://10.73.1.1/\nChange it after logging in, then this line stays until you edit /etc/issue.\n\n"
+          "FR_OS webUI: https://10.73.1.1/ (LAN eth1)\n\nlast line\n")
+MFA_USER = {"password_hash": _hash(PASSWORD), "role": "admin",
+            "mfa": {"totp": {"secret": "JBSWY3DPEHPK3PXP", "added": 1790000000}}}
+
+PORTS_CONFIG = """\
+version: 1
+hostname: fr-router
+interfaces:
+  wan: {device: eth0, zone: wan}
+  lan: {device: eth1, zone: lan, address: 10.73.1.1/24}
+  iot: {vlan: {parent: eth1, id: 20}, zone: iot, address: 10.73.20.1/24}
+  dmz: {device: eth2, zone: guests}
+  'lab\\x': {device: veth9}
+zones: {wan: {}, lan: {}, iot: {}, guests: {}}
+"""
+IP_ADDRESSES = {"argv": ["ip", "-j", "-4", "address", "show"], "stdout": json.dumps([
+    {"ifname": "eth0", "addr_info": [{"local": "192.168.1.129", "prefixlen": 24}]},
+    {"ifname": "eth1", "addr_info": [{"local": "10.73.1.1", "prefixlen": 24}, {"local": "10.73.1.2"},
+                                     {"prefixlen": 8}, "x"]},
+    {"ifname": 7}, "odd", {"ifname": "lo", "addr_info": [{"local": "127.0.0.1", "prefixlen": 8}]}])}
+LISTEN = {"etc/fr_os/webui-listen.json": json.dumps({"addresses": ["10.73.1.1", "127.0.0.1"]})}
+CONSOLE = "etc/issue.d/fr_os-ports.issue"
+OLD_ISSUE = {"etc/issue": "Debian GNU/Linux 12 \\n \\l\n\nFR_OS webUI: https://10.73.1.1/ (LAN eth1)\n\n"
+                          "FR_OS no LAN port assigned yet\nnext\n"}
+
+#: A live boot: what /proc/cmdline and /proc/mounts say, and the block
+#: devices in /sys/class/block (symlinks into /sys/devices).
+LIVE = "BOOT_IMAGE=/live/vmlinuz boot=live components ip=frommedia persistence quiet\n"
+LIVE_NO_OPTION = "BOOT_IMAGE=/live/vmlinuz boot=live components quiet\n"
+MEDIUM = "/dev/sdb1 /run/live/medium iso9660 ro,noatime 0 0\n"
+PERSISTENT = "/dev/sdb3 /run/live/persistence/sdb3 ext4 rw 0 0\noverlay / overlay rw 0 0\n"
+
+
+def _disk(name: str, partitions: int = 0, ro: str = "0") -> dict:
+    files = {f"sys/class/block/{name}": {"link": f"../../devices/pci0/block/{name}"},
+             f"sys/devices/pci0/block/{name}/ro": ro + "\n"}
+    sep = "p" if name[-1].isdigit() else ""
+    for n in range(1, partitions + 1):
+        part = f"{name}{sep}{n}"
+        files[f"sys/class/block/{part}"] = {"link": f"../../devices/pci0/block/{name}/{part}"}
+        files[f"sys/devices/pci0/block/{name}/{part}/partition"] = f"{n}\n"
+    return files
+
+
+def _live(cmdline: str = LIVE, mounts: str = MEDIUM, **extra) -> dict:
+    return {"proc/cmdline": cmdline, "proc/mounts": mounts, **extra}
+
+
+def _sfdisk(device: str, label: str, partitions: list[tuple[int, int]], sector: int = 512) -> dict:
+    table = {"partitiontable": {"label": label, "id": "0x1234", "device": device, "unit": "sectors",
+                                "sectorsize": sector,
+                                "partitions": [{"node": f"{device}{i + 1}", "start": s, "size": n, "type": "83"}
+                                               for i, (s, n) in enumerate(partitions)]}}
+    return {"argv": ["sfdisk", "--json", "--", device], "stdout": json.dumps(table)}
+
+
+def _size(device: str, n: int) -> dict:
+    return {"argv": ["blockdev", "--getsize64", device], "stdout": f"{n}\n"}
+
+
+NO_LABEL = {"argv": ["blkid", "-t", "LABEL=persistence"], "rc": 2}
+STICK = 8 * 1024**3
+#: An ISO written to an 8 GiB stick: 1.2 GiB of image, the rest free.
+ISO_STICK = [_sfdisk("/dev/sdb", "dos", [(64, 2457600), (2457664, 8192)]), _size("/dev/sdb", STICK), NO_LABEL]
+
+FIRST_BOOT_SESSIONS = {
+    "detect interfaces": (PORTS, [_c("detect-interfaces"), _c("detect-interfaces", "--include-virtual")], []),
+    "detect interfaces, none": ({}, [_c("detect-interfaces"), _c("detect-interfaces", "--include-v")], []),
+    "detect interfaces, empty": ({"sys/class/net/": ""}, [_c("detect-interfaces", "x")], []),
+    "wan/lan, one server": (PORTS, [_c("detect-wan-lan")], [_offer("eth1", "192.168.1.0/24")]),
+    "wan/lan, the upstream in the default": (PORTS, [_c("detect-wan-lan")], [_offer("eth0", "10.73.0.0/16")]),
+    "wan/lan, the upstream in two": (PORTS, [_c("detect-wan-lan")], [
+        _offer("enp3s0", "10.0.0.0/8"), _offer("eth2", None)]),
+    "wan/lan, the upstream everywhere": (PORTS, [_c("detect-wan-lan")], [_offer("eth0", "0.0.0.0/0")]),
+    "wan/lan, two servers": (PORTS, [_c("detect-wan-lan")], [_offer("eth0", "192.168.1.0/24"),
+                                                              _offer("eth2", "192.168.2.0/24")]),
+    "wan/lan, no server": (PORTS, [_c("detect-wan-lan")], []),
+    "wan/lan, no server, no link": (TWO_PORTS, [_c("detect-wan-lan")], []),
+    "wan/lan, only the wan has a link": ({**_port("eth0", "52:54:00:00:00:01"),
+                                          **_port("eth1", "52:54:00:00:00:02", carrier="0")},
+                                         [_c("detect-wan-lan")], [_offer("eth0", "192.168.178.0/24")]),
+    "wan/lan, one port": (_port("eth0"), [_c("detect-wan-lan")], [_offer("eth0", "192.168.1.0/24")]),
+    "wan/lan, no ports": ({}, [_c("detect-wan-lan")], []),
+    "assign interfaces": ({}, [_c("assign-interfaces", "--wan", "eth0", "--lan", "eth1"),
+                               _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1"),
+                               _c("assign-interfaces", "--wan", "enp1s0", "--lan", "enp2s0", "--opt", "dmz:enp3s0",
+                                  "--opt", "guests:enp4s0", "--hostname", "edge", "--lan-address", "172.29.73.1/24",
+                                  "--force")], []),
+    "assign interfaces, elsewhere": ({}, [
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--out", "@ROOT@/srv/new/config.yaml",
+           "--lan-address", "10.1.0.1/16"),
+        _c("assign-interfaces", "--wan=eth0", "--lan", "eth1: x", "--opt", "a:b:c", "--hostname", "'yes'",
+           "--out", "@ROOT@/srv/odd.yaml"),
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--lan-address", "10.0.0.1/32",
+           "--out", "@ROOT@/srv/32.yaml")], []),
+    "assign interfaces, refused": ({}, [
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--opt", "dmz"),
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--lan-address", "10.0.0.1/024"),
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--lan-address", "10.0.0.300/24"),
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--lan-address", "10.0.0.1"),
+        _c("assign-interfaces", "--wan", "eth0", "--lan", "eth1", "--lan-address", "10.0.0.1/255.255.255.0"),
+        _c("assign-interfaces", "--wan", "eth0"), _c("assign-interfaces", "--lan", "eth1", "--wan")], []),
+    "admin password, generated": ({}, [_c("set-admin-password", "--generate")], []),
+    "admin password, on the console": ({}, [_c("set-admin-password", "--generate", "--show-on-console"),
+                                            _c("initial-password")], []),
+    "admin password, on the console, again": ({ISSUE: SHOWN}, [
+        _c("set-admin-password", "--username", "ops", "--generate", "--show-on-console")], []),
+    "admin password, by hand": ({AUTH: _auth(viewer={"password_hash": _hash("x"), "role": "viewer"})}, [
+        {**_c("set-admin-password"), "passwords": ["Kept-safe-pass-77", "Kept-safe-pass-77"]},
+        {**_c("set-admin-password", "--username", "viewer"), "passwords": ["Kept-safe-pass-78", "Kept-safe-pass-78"]},
+        {**_c("set-admin-password"), "passwords": ["Kept-safe-pass-77", "Kept-safe-pass-76"]},
+        {**_c("set-admin-password"), "passwords": ["short", "short"]},
+        {**_c("set-admin-password", "--username", "admin"), "passwords": ["admin-admin-admin", "admin-admin-admin"]},
+        {**_c("set-admin-password"), "passwords": ["Only-one-typed-1"]},
+        _c("set-admin-password", "--show-on-console")], []),
+    "admin password, bad name": ({}, [_c("set-admin-password", "--username", "Root!", "--generate"),
+                                      {**_c("set-admin-password", "--username", "-x"),
+                                       "passwords": ["Kept-safe-pass-77", "Kept-safe-pass-77"]}], []),
+    "mfa reset": ({AUTH: _auth(admin=MFA_USER, other={"password_hash": _hash("y"), "role": "viewer"}),
+                   "etc/fr_os/webui/sessions.json": json.dumps({
+                       "a" * 64: {"user": "admin", "expires": NOW + 100},
+                       "b" * 64: {"user": "other", "expires": NOW + 100},
+                       "c" * 64: {"user": "admin", "expires": NOW - 100}})},
+                  [_c("mfa-reset", "admin"), _c("mfa-reset", "admin"), _c("mfa-reset", "nobody"), _c("mfa-reset")],
+                  []),
+    "initial password, unchanged": ({AUTH: _auth(admin={"password_hash": _hash(PASSWORD), "role": "admin",
+                                                        "must_change": True}), ISSUE: SHOWN},
+                                    [_c("initial-password")], []),
+    "initial password, changed": ({AUTH: _auth(admin={"password_hash": _hash("Another-one-5678"),
+                                                      "role": "admin"}), ISSUE: SHOWN},
+                                  [_c("initial-password"), _c("initial-password")], []),
+    "initial password, renamed": ({AUTH: _auth(kolos={"password_hash": _hash(PASSWORD), "role": "admin"}),
+                                   ISSUE: SHOWN}, [_c("initial-password")], []),
+    "initial password, no accounts": ({ISSUE: SHOWN}, [_c("initial-password")], []),
+    "initial password, legacy": ({"etc/issue": LEGACY}, [_c("initial-password")], []),
+    "initial password, legacy and shown": ({"etc/issue": LEGACY, ISSUE: SHOWN,
+                                            AUTH: _auth(admin={"password_hash": _hash(PASSWORD), "role": "admin"})},
+                                           [_c("initial-password")], []),
+    "initial password, odd files": ({"etc/issue": "plain\n", ISSUE: "something else\n"}, [_c("initial-password")],
+                                    []),
+    "initial password, nothing": ({}, [_c("initial-password")], []),
+    "console ports": ({**PORTS, **LISTEN, "etc/fr_os/applied-config.yaml": PORTS_CONFIG},
+                      [_c("console-ports", "--print"), _c("console-ports"), _c("console-ports")], [IP_ADDRESSES]),
+    "console ports, config.yaml only": ({**PORTS, "etc/fr_os/config.yaml": PORTS_CONFIG,
+                                         "etc/fr_os/webui-listen.json": '{"addresses": ["x"]}', **OLD_ISSUE},
+                                        [_c("console-ports")], [{"argv": ["agetty"], "error": "missing"}]),
+    "console ports, the lan cable elsewhere": ({**_port("eth0"), **_port("eth1", carrier="0"), **_port("eth3"),
+                                                "etc/fr_os/applied-config.yaml": PORTS_CONFIG},
+                                               [_c("console-ports", "--print")], [IP_ADDRESSES]),
+    "console ports, no roles": ({**PORTS, **LISTEN}, [_c("console-ports", "--print")], [
+        {"argv": ["ip", "-j"], "rc": 1, "stderr": "bad\n"}]),
+    "console ports, no ports": ({"etc/fr_os/config.yaml": "a: [\n"}, [_c("console-ports", "--print")], [
+        {"argv": ["ip", "-j"], "stdout": "not json"}]),
+    "console ports, odd config": ({**TWO_PORTS, "etc/fr_os/config.yaml": (
+        "interfaces:\n  lan: {device: eth1, zone: lan, vlan: {parent: eth0, id: true}}\n  wan: {device: 7}\n"
+        "  x: [1]\n  y: {vlan: {parent: eth1, id: '3'}}\n  lan2: {device: eth1, zone: 5}\n"),
+        "etc/fr_os/webui-listen.json": '{"addresses": ["10.0.0.1", "127.0.0.1"]}'},
+        [_c("console-ports", "--print")], [{"argv": ["ip", "-j"], "error": "missing"}]),
+    "console ports, a list": ({**TWO_PORTS, "etc/fr_os/config.yaml": "interfaces: [eth0]\n",
+                               "etc/fr_os/webui-listen.json": '{"addresses": []}'},
+                              [_c("console-ports", "--print")], [{"argv": ["ip", "-j"], "error": "timeout"}]),
+    "persistence, installed": ({"proc/cmdline": "BOOT_IMAGE=/vmlinuz root=/dev/sda2 ro\n", "proc/mounts": ""},
+                               [_c("persistence", "status"), _c("persistence", "auto")], []),
+    "persistence, active": (_live(mounts=MEDIUM + PERSISTENT), [_c("persistence", "status"),
+                                                               _c("persistence", "auto", "--reboot")], []),
+    "persistence, without the option": (_live(LIVE_NO_OPTION), [_c("persistence", "status"),
+                                                                _c("persistence", "auto")],
+                                        [{"argv": ["blkid", "-t"], "stdout": "/dev/sdb3\n/dev/sdc1\n"}]),
+    "persistence, none, not asked for": (_live(LIVE_NO_OPTION), [_c("persistence", "status"),
+                                                                 _c("persistence", "auto")], [NO_LABEL]),
+    "persistence, labelled, unused": (_live(), [_c("persistence", "auto")],
+                                      [{"argv": ["blkid", "-t"], "stdout": "\n/dev/sdc1\n"}]),
+    "persistence, no medium": (_live(mounts=""), [_c("persistence", "status"), _c("persistence", "auto")],
+                               [NO_LABEL]),
+    "persistence, no blkid": (_live(mounts=""), [_c("persistence", "status")],
+                              [{"argv": ["blkid"], "error": "missing"}]),
+    "persistence, created": (_live(**_disk("sdb", 2), **{"dev/sdb3": ""}), [
+        _c("persistence", "auto", "--reboot")], ISO_STICK),
+    "persistence, created, no reboot": (_live(**_disk("sdb", 2), **{"dev/sdb3": ""}), [_c("persistence", "auto")],
+                                        ISO_STICK + [{"argv": ["mount"], "rc": 32, "stderr": "mount: bad\n"}]),
+    "persistence, created on nvme, gpt": (_live(mounts="/dev/nvme0n1p1 /run/live/medium vfat ro 0 0\n",
+                                                **_disk("nvme0n1", 1), **{"dev/nvme0n1p2": ""}),
+                                          [_c("persistence", "auto")],
+                                          [_sfdisk("/dev/nvme0n1", "gpt", [(2048, 4194304)], 4096),
+                                           _size("/dev/nvme0n1", 64 * 1024**3), NO_LABEL]),
+    "persistence, the partition does not appear": (_live(**_disk("sdb", 2)), [_c("persistence", "auto")],
+                                                   ISO_STICK),
+    "persistence, too small": (_live(**_disk("sdb", 2)), [_c("persistence", "auto")], [
+        _sfdisk("/dev/sdb", "dos", [(64, 2457600)]), _size("/dev/sdb", 2457664 * 512 + 200 * 1024**2), NO_LABEL]),
+    "persistence, four partitions": (_live(**_disk("sdb", 4)), [_c("persistence", "auto")], [
+        _sfdisk("/dev/sdb", "dos", [(64, 100), (200, 100), (400, 100), (600, 100)]), _size("/dev/sdb", STICK),
+        NO_LABEL]),
+    "persistence, odd table": (_live(**_disk("sdb", 1)), [_c("persistence", "auto")], [
+        {"argv": ["sfdisk", "--json"], "stdout": json.dumps({"partitiontable": {"label": "sun"}})},
+        _size("/dev/sdb", STICK), NO_LABEL]),
+    "persistence, unreadable table": (_live(**_disk("sdb", 1)), [_c("persistence", "auto")], [
+        {"argv": ["sfdisk", "--json"], "stdout": "{"}, _size("/dev/sdb", STICK), NO_LABEL]),
+    "persistence, no size": (_live(**_disk("sdb", 1)), [_c("persistence", "auto")], [
+        _sfdisk("/dev/sdb", "dos", [(64, 100)]), NO_LABEL]),
+    "persistence, sfdisk fails": (_live(**_disk("sdb", 1)), [_c("persistence", "auto")], [
+        {"argv": ["sfdisk", "--json"], "rc": 1, "stderr": "sfdisk: cannot open /dev/sdb: Permission denied\n"},
+        NO_LABEL]),
+    "persistence, no sfdisk": (_live(**_disk("sdb", 1)), [_c("persistence", "auto")], [
+        {"argv": ["sfdisk"], "error": "missing"}, NO_LABEL]),
+    "persistence, a cd": (_live(mounts="/dev/sr0 /run/live/medium iso9660 ro 0 0\n"), [_c("persistence", "auto")],
+                          [NO_LABEL]),
+    "persistence, read-only stick": (_live(**_disk("sdb", 1, ro="1")), [_c("persistence", "auto")], [NO_LABEL]),
+    "persistence, an odd medium": (_live(mounts="/dev/../sdb1 /run/live/medium iso9660 ro 0 0\n"),
+                                   [_c("persistence", "auto")], [NO_LABEL]),
+    "persistence, whole disk": ({**_disk("sda"), "dev/sda1": "", "proc/mounts": MEDIUM}, [
+        _c("persistence", "create", "/dev/sda"), _c("persistence", "create", "/dev/sda", "--yes")],
+        [{"argv": ["sfdisk", "--json"], "rc": 1, "stderr": "sfdisk: /dev/sda: does not contain a recognized "
+                                                            "partition table\n"}]),
+    "persistence, whole disk with partitions": ({**_disk("sda", 2), "dev/sda1": "", "proc/mounts": MEDIUM}, [
+        _c("persistence", "create", "/dev/sda", "--yes"), _c("persistence", "create", "/dev/sda", "--yes", "--wipe")],
+        [_sfdisk("/dev/sda", "gpt", [(2048, 1000), (4096, 1000)])]),
+    "persistence, whole disk refused": ({**_disk("sda", 2), **_disk("sr0"), **_disk("sdc", ro="1"),
+                                         "proc/mounts": "/dev/sda2 /mnt ext4 rw 0 0\n"}, [
+        _c("persistence", "create", "/dev/sda", "--yes"), _c("persistence", "create", "/dev/sda1", "--yes"),
+        _c("persistence", "create", "/dev/sr0", "--yes"), _c("persistence", "create", "/dev/sdc", "--yes"),
+        _c("persistence", "create", "/dev/loop0", "--yes"), _c("persistence", "create", "sda", "--yes"),
+        _c("persistence", "create", "/dev/sda/../sdb", "--yes"), _c("persistence", "create", "--", "-x", "--yes")],
+        []),
+    "persistence, whole disk, no partition": ({**_disk("sdd"), "proc/mounts": ""}, [
+        _c("persistence", "create", "/dev/sdd", "--yes")], [{"argv": ["sfdisk", "--json"], "stdout": ""}]),
+    "persistence, whole disk, mkfs fails": ({**_disk("sdd"), "dev/sdd1": "", "proc/mounts": ""}, [
+        _c("persistence", "create", "/dev/sdd", "--yes")], [
+        {"argv": ["sfdisk", "--json"], "stdout": ""},
+        {"argv": ["mkfs.ext4"], "rc": 1, "stdout": "mke2fs: Device size reported to be zero.\n"}]),
+    "persistence, usage": ({}, [_c("persistence"), _c("persistence", "bogus"), _c("persistence", "create")], []),
+}
+
+
+@pytest.mark.parametrize("name", sorted(FIRST_BOOT_SESSIONS))
+def test_cli_first_boot(system, name):
+    setup, requests, table = FIRST_BOOT_SESSIONS[name]
+    _session(system, f"cli/first boot/{name}", setup, requests, table, RANDOM)
