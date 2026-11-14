@@ -4,6 +4,7 @@ package apply
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -114,6 +115,11 @@ func answerDiscover(t *testing.T, device string) error {
 	buf := make([]byte, 4096)
 	for {
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		if errors.Is(err, syscall.EINTR) {
+			// Go's preemption signal (SIGURG) can land in a blocking
+			// recvfrom; the probe itself retries the same way.
+			continue
+		}
 		if err != nil {
 			return err
 		}
