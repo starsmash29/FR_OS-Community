@@ -119,7 +119,7 @@
 </table>
 
 Every feature that is not needed is off, and every service listens only
-where it has to. [All features, in detail](docs/wiki/index.md)
+where it has to. [All features, in detail](docs/wiki/features/index.md)
 
 ## 100% local
 
@@ -279,6 +279,10 @@ also be published on the project website.
   [Zones and segments](docs/wiki/concepts/zones.md) ·
   [Applying changes safely](docs/wiki/concepts/apply-and-rollback.md) ·
   [The configuration file](docs/wiki/concepts/configuration-file.md)
+- [Features](docs/wiki/features/index.md): one page each, from firewall
+  rules and the VPN to the XDP filter and AI-IDS
+- [Configuration reference](docs/wiki/reference/configuration.md): every
+  key of `config.yaml`
 
 ## Contributing
 

@@ -32,17 +32,32 @@ How FR_OS thinks. Read these before you change the firewall policy.
 | [Applying changes safely](concepts/apply-and-rollback.md) | Validation, the apply transaction, confirmation, revert and rollback |
 | [The configuration file](concepts/configuration-file.md) | `config.yaml`: where it lives, its sections, and how it is checked |
 
+## Features
+
+One page per feature: how to turn it on, an example, its limits and how
+to check it. Start at the [feature overview](features/index.md).
+
+| Network | Protection and visibility |
+| --- | --- |
+| [Firewall rules and schedules](features/firewall-rules.md) | [DNS filtering and local names](features/dns-filtering.md) |
+| [NAT and port forwards](features/nat.md) | [Application control](features/app-control.md) |
+| [DHCP](features/dhcp.md) | [XDP SNI filter](features/xdp-sni-filter.md) |
+| [IPv6](features/ipv6.md) | [TLS fingerprints](features/tls-fingerprints.md) |
+| [WireGuard VPN](features/wireguard.md) | [IoT discovery and isolation](features/iot.md) |
+| [ZTNA gate](features/ztna.md) | [AI-IDS](features/ai-ids.md) |
+| | [Monitoring and logs](features/monitoring.md) |
+
+## Reference
+
+| Page | What you find |
+| --- | --- |
+| [Configuration reference](reference/configuration.md) | Every key of `config.yaml`: its type, default, limits and the exact rule it is checked against |
+
 ## Coming next
 
 These sections are being written and will appear here as they are
 finished:
 
-- **Configuration reference:** every key of `config.yaml`, with its type,
-  default, limits and the exact validation rule.
-- **Features:** one page per feature (firewall rules, NAT, DHCP, IPv6,
-  DNS filtering, application control, XDP SNI filter, TLS fingerprints,
-  IoT, AI-IDS, WireGuard, ZTNA, schedules, monitoring), each with how to
-  turn it on, examples, limits and troubleshooting.
 - **Web console guide:** every screen, field by field.
 - **Operations:** the `firewall-cli` command reference, backups,
   updates, logs and troubleshooting.
