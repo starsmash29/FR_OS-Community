@@ -867,3 +867,36 @@ replay.
   helper (phase 4f-4); they come back with those phases. Every other
   check of boots 1 to 4 is kept as 1.x has it.
 
+
+## 2026-11-14: a staged kernel, tried once (phase 4f-3a)
+
+`firewall-cli kernel status|stage|unstage|confirm-boot`, held to 1.x's
+`frfw.cli` and `frfw.kernel_boot` (ROADMAP SEC-14, SEC-23): the GRUB
+environment block on the persistence partition, the staged slot
+(`fr_os-boot/staged/`, its `SHA256SUMS` and `expect.json`), and the
+boot-time check `fr-kernel-confirm.service` runs. `reference/
+test_fros_apply_cases.py` records them as `cli/kernel/...` sessions
+against the fake system, with the persistence partition's mount point
+under the case's tree (`Paths.LiveRoot` in 2.x) and the running kernel
+fixed at `6.1.0-26-amd64`. The system calls that are not programs are
+the recording's pseudo-calls, as the DHCP probe is: `["statvfs", path]`
+(its output the free bytes), `["connect", "127.0.0.1", "443", "3"]` (rc
+0: the webUI answered within 3 s) and `["sleep", "2.0"]`, the check's
+interval, which moves a clock of its own from 0 (so a check that never
+passes makes its 91 tries in the recording, and in no time).
+
+- **No recorded case changes.** Every message, alert, exit status and
+  file left is 1.x's.
+- **The recording appends the `cli/kernel/` cases to the committed
+  ones**, for the reason phase 4f-1 gives.
+- **The boot test's boots 5 to 8 come back** (phase 4f-2b left them
+  out): a staged kernel tried and kept, tried and failed by the
+  router's own check (the webUI masked, the LAN port down), the
+  fallback boot with its alerts, and a trial that panics. Two
+  differences from 1.x's: the host stages the kernel with the test's
+  own few lines (the slot and block as `firewall-cli kernel stage`
+  writes them; the host has no 2.x library to call, and the replay
+  holds the command itself), and boot 5 waits for
+  `fr-kernel-confirm`'s line on the serial console instead of the
+  Update screen's kernel card, which reads the update-helper (phase
+  4f-3b). Boots 9 and 10 come with 4f-3b.
