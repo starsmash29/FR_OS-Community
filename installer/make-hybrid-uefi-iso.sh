@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Adds real UEFI boot support to the FR_OS live ISO (phase 13, see
+# ARCHITECTURE.md's "Hybrid BIOS + UEFI boot support" section), puts
+# GRUB in front of the kernel on BIOS machines too (ROADMAP SEC-14), and
+# repackages installer/live-build/binary.hybrid.iso.
+#
+# Why this exists as a separate, hand-rolled step instead of a
+# live-build config flag: this project's live-build is a very old,
+# Ubuntu-patched snapshot (3.0~a57 -- see installer/live-build/auto/
+# config's own header comment for the full list of its quirks already
+# worked around). Confirmed by reading its actual scripts (not
+# assumed): `lb_config`'s getopt string only ever accepts a *singular*
+# `--bootloader grub|syslinux|yaboot`, there is no plural
+# `--bootloaders` option at all; `lb_binary_grub`'s "grub" case builds
+# GRUB *Legacy* (menu.lst, stage2_eltorito), not GRUB 2 EFI; and
+# `lb_binary_iso` shells out to `genisoimage` (which isn't even
+# installed as a separate package on a build host with a modern
+# xorriso -- it gets installed *inside the chroot* for this snapshot,
+# a build-side detail, not a real dependency of this script), with no
+# EFI System Partition / GPT support anywhere in it. A real, current
+# Debian live-build package's `--bootloaders syslinux,grub-efi` may
+# well produce this same result more directly -- worth trying first on
+# a real Debian build host, not this sandbox's ancient snapshot -- but
+# this script produces a correct, verified hybrid image regardless of
+# which live-build version assembled `binary/`.
+#
+# What it actually does: `lb build` already produces a complete,
+# working `binary/` staging tree (kernel, initrd, squashfs, isolinux)
+# and a BIOS-only `binary.hybrid.iso`. This script:
+#   1. builds a small standalone GRUB EFI binary (EFI/BOOT/BOOTX64.EFI)
+#      that just chainloads config/includes.binary/boot/grub/grub.cfg
+#      (already copied into binary/boot/grub/grub.cfg by live-build's
+#      own includes.binary step by the time this script runs);
+#   2. packs it into a small FAT-formatted EFI System Partition image
+#      (binary/boot/grub/efi.img);
+#   3. builds the same GRUB for BIOS as binary/boot/grub/grub.lnx, a
+#      GRUB core image behind a Linux boot header (lnxboot.img), which
+#      isolinux's default menu entry starts like a kernel
+#      (config/bootloaders/isolinux/live.cfg.in). So both firmwares end
+#      up in the same grub.cfg -- the one place that decides which kernel
+#      boots, which is what a kernel update with a fallback to the
+#      image's own kernel needs (ROADMAP SEC-14). isolinux stays the El
+#      Torito/MBR boot program, so the medium's layout (and the
+#      persistence partition apply.CreatePersistenceOnBootMedium appends to it) doesn't
+#      change; its other entries start the kernel directly, without
+#      GRUB, as a way out;
+#   4. re-invokes the ISO packaging step itself, via xorriso -as
+#      mkisofs, with BOTH the original BIOS El Torito entry
+#      (identical flags to what lb_binary_iso already used) AND a
+#      second, UEFI El Torito entry pointing at that ESP image, plus
+#      -isohybrid-gpt-basdat so the ESP is also a real GPT partition on
+#      the disk image itself -- verified end to end in this project's
+#      own sandbox (both a synthetic image and, separately, this real
+#      project's actual 312 MB binary/ tree from a prior full build):
+#      `xorriso -report_el_torito` shows both a BIOS and a UEFI El
+#      Torito image, `-report_system_area` shows a hybrid MBR *and* a
+#      GPT table with a 0xef/ESP-GUID partition pointing at
+#      boot/grub/efi.img, `file` reports the result as a bootable
+#      ISO 9660 image, and mounting efi.img directly confirms a valid
+#      PE32+ EFI application at EFI/BOOT/BOOTX64.EFI. Total size
+#      overhead measured on that real tree: about 1 MB on a 327 MB
+#      image.
+#
+# Host tool requirements beyond what installer/build-live-image.sh
+# already documents: `grub-common` (grub-mkstandalone, grub-mkimage),
+# `grub-efi-amd64-bin` (the x86_64-efi module tree grub-mkstandalone
+# embeds), `grub-pc-bin` (the i386-pc modules and lnxboot.img),
+# `mtools` + `dosfstools` (mmd/mcopy/mkfs.vfat, to build the FAT ESP
+# image), `xorriso` (the actual ISO repackaging tool). All are already
+# named in build-live-image.sh's header comment.
+#
+# FROS_LB_DIR points it at another live-build directory (config/binary,
+# binary/, chroot/usr/lib/ISOLINUX/isohdpfx.bin); installer/qemu-boot-test.py
+# boots what it makes, with BIOS and with UEFI firmware.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LB_DIR="${FROS_LB_DIR:-$REPO_ROOT/installer/live-build}"
+BINARY_DIR="$LB_DIR/binary"
+CHROOT_DIR="$LB_DIR/chroot"
+ISO_PATH="$LB_DIR/binary.hybrid.iso"
+
+if [[ ! -d "$BINARY_DIR" ]]; then
+    echo "error: $BINARY_DIR does not exist -- run 'lb build' first" >&2
+    exit 1
+fi
+
+# config/binary is generated by `lb config` (gitignored, see
+# .gitignore's "lb_config's own generated state" note) -- sourced here
+# instead of hardcoding ISO metadata a second time, so this script
+# can't silently drift from installer/live-build/auto/config's actual
+# --iso-* flags.
+# shellcheck source=/dev/null
+. "$LB_DIR/config/binary"
+
+if [[ "${LB_BOOTLOADER:-}" != "syslinux" ]]; then
+    echo "error: LB_BOOTLOADER='${LB_BOOTLOADER:-}', expected 'syslinux' -- this script's BIOS El Torito entry hardcodes isolinux/isolinux.bin, update it if the bootloader choice changed" >&2
+    exit 1
+fi
+
+for tool in grub-mkstandalone grub-mkimage mkfs.vfat mmd mcopy xorriso; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "error: '$tool' not found -- see this script's header comment for required host packages" >&2
+        exit 1
+    fi
+done
+
+if [[ ! -f "$BINARY_DIR/isolinux/isolinux.bin" ]]; then
+    echo "error: $BINARY_DIR/isolinux/isolinux.bin missing -- expected from lb_binary_syslinux" >&2
+    exit 1
+fi
+
+if [[ ! -f "$BINARY_DIR/boot/grub/grub.cfg" ]]; then
+    echo "error: $BINARY_DIR/boot/grub/grub.cfg missing -- expected to be copied in by live-build's own config/includes.binary step during 'lb build'" >&2
+    exit 1
+fi
+
+GRUB_PC_DIR=/usr/lib/grub/i386-pc
+if [[ ! -f "$GRUB_PC_DIR/lnxboot.img" ]]; then
+    echo "error: $GRUB_PC_DIR/lnxboot.img missing -- install grub-pc-bin, see this script's header comment" >&2
+    exit 1
+fi
+
+ISOHDPFX="$CHROOT_DIR/usr/lib/ISOLINUX/isohdpfx.bin"
+if [[ ! -f "$ISOHDPFX" ]]; then
+    echo "error: $ISOHDPFX missing -- expected from the 'isolinux' chroot package (config/package-lists/fr_os.list.chroot)" >&2
+    exit 1
+fi
+
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+# What both GRUBs carry built in: reading the ISO and the persistence
+# partition (ext2 reads ext4), the menu, the serial console, the
+# environment block a trial boot of a new kernel keeps its state in
+# (loadenv) and the check of its files (hashsum, ROADMAP SEC-14). The BIOS core image loads nothing from the
+# medium afterwards, so everything grub.cfg uses has to be in this list.
+GRUB_MODULES="part_gpt part_msdos fat iso9660 ext2 linux normal configfile search search_label search_fs_file echo test serial terminal halt loadenv hashsum gcry_sha256"
+
+# The same for both: find this ISO by its volume label, wherever the
+# firmware put it (a stick, a CD, a disk's El Torito image), and read
+# the real menu from it.
+cat > "$WORK_DIR/grub-embed.cfg" <<EOF
+search --no-floppy --set=root --label ${LB_ISO_VOLUME}
+set prefix=(\$root)/boot/grub
+configfile (\$root)/boot/grub/grub.cfg
+EOF
+
+echo "==> Building standalone GRUB EFI binary (chainloads boot/grub/grub.cfg by volume label '${LB_ISO_VOLUME}')"
+mkdir -p "$WORK_DIR/EFI/BOOT"
+grub-mkstandalone \
+    -O x86_64-efi \
+    -o "$WORK_DIR/EFI/BOOT/BOOTX64.EFI" \
+    --modules="$GRUB_MODULES" \
+    "boot/grub/grub.cfg=$WORK_DIR/grub-embed.cfg"
+
+echo "==> Building GRUB for BIOS (boot/grub/grub.lnx, started by isolinux's default entry)"
+# shellcheck disable=SC2086  # GRUB_MODULES is a word list
+grub-mkimage \
+    -O i386-pc \
+    -o "$WORK_DIR/core.img" \
+    -p /boot/grub \
+    -c "$WORK_DIR/grub-embed.cfg" \
+    biosdisk $GRUB_MODULES
+cat "$GRUB_PC_DIR/lnxboot.img" "$WORK_DIR/core.img" > "$BINARY_DIR/boot/grub/grub.lnx"
+
+echo "==> Packing it into a FAT EFI System Partition image (boot/grub/efi.img)"
+# 10 MiB is comfortably larger than grub-mkstandalone's own output
+# (~6 MB with this module set, measured) while staying negligible next
+# to the ~327 MB image it's added to.
+dd if=/dev/zero of="$WORK_DIR/efi.img" bs=1M count=10 status=none
+mkfs.vfat -F 16 -n FR_OS_ESP "$WORK_DIR/efi.img" >/dev/null
+mmd -i "$WORK_DIR/efi.img" ::EFI
+mmd -i "$WORK_DIR/efi.img" ::EFI/BOOT
+mcopy -i "$WORK_DIR/efi.img" "$WORK_DIR/EFI/BOOT/BOOTX64.EFI" ::EFI/BOOT/BOOTX64.EFI
+
+echo "==> Staging the ESP into binary/"
+mkdir -p "$BINARY_DIR/EFI/BOOT"
+cp "$WORK_DIR/efi.img" "$BINARY_DIR/boot/grub/efi.img"
+cp "$WORK_DIR/EFI/BOOT/BOOTX64.EFI" "$BINARY_DIR/EFI/BOOT/BOOTX64.EFI"
+
+echo "==> Repackaging binary/ into a hybrid BIOS+UEFI ISO with xorriso"
+rm -f "$ISO_PATH"
+xorriso -as mkisofs \
+    -iso-level 3 -full-iso9660-filenames -allow-multidot \
+    -J -l \
+    -V "${LB_ISO_VOLUME}" \
+    -A "${LB_ISO_APPLICATION}" \
+    -publisher "${LB_ISO_PUBLISHER}" \
+    -o "$ISO_PATH" \
+    -isohybrid-mbr "$ISOHDPFX" \
+    -eltorito-boot isolinux/isolinux.bin \
+        -eltorito-catalog isolinux/boot.cat \
+        -no-emul-boot -boot-load-size 4 -boot-info-table \
+    -eltorito-alt-boot \
+        -e boot/grub/efi.img \
+        -no-emul-boot -isohybrid-gpt-basdat \
+    "$BINARY_DIR"
+
+echo
+echo "==> Verifying the result"
+file "$ISO_PATH"
+xorriso -indev "$ISO_PATH" -report_el_torito plain 2>&1 | grep "El Torito boot img"
+xorriso -indev "$ISO_PATH" -report_system_area plain 2>&1 | grep "System area summary"
+echo
+echo "==> Done: $ISO_PATH ($(du -h "$ISO_PATH" | cut -f1)), bootable via both legacy BIOS and UEFI"

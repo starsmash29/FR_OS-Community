@@ -435,6 +435,19 @@ func TestFirstBootUnits(t *testing.T) {
 	if got := strings.Fields(last(unit, "After")); !slices.Contains(got, "fr-persistence-setup.service") {
 		t.Errorf("fr-first-boot.service: After=%q", got)
 	}
+	// Both run ensure-accounts, which makes the audit log's directory
+	// under /var/log on a fresh system; under ProtectSystem=strict only
+	// systemd can make it (an optional ReadWritePaths= entry for it
+	// leaves /var read-only, and first boot fails with EROFS).
+	for _, name := range []string{"fr-accounts.service", "fr-first-boot.service"} {
+		svc := section(t, name, "[Service]")
+		if got := last(svc, "LogsDirectory"); got != "fr_os" {
+			t.Errorf("%s: LogsDirectory=%q, want fr_os", name, got)
+		}
+		if got := last(svc, "LogsDirectoryMode"); got != "0750" {
+			t.Errorf("%s: LogsDirectoryMode=%q, want 0750", name, got)
+		}
+	}
 	wants := strings.Fields(last(section(t, "fr-webui.service", "[Unit]"), "Wants"))
 	for _, w := range []string{"fr-initial-password.path", "fr-initial-password.service"} {
 		if !slices.Contains(wants, w) {

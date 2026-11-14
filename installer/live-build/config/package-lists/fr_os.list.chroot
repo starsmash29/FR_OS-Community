@@ -1,0 +1,44 @@
+# What the image installs from Debian. FR_OS itself is not a package:
+# its Go and Rust binaries are built on the build host and installed by
+# config/hooks/0100-install-fr_os.hook.chroot. 1.x's python3, pip,
+# PyYAML, bpftool and libbpf are gone: nothing on the router runs Python,
+# and fr-xdp (Rust, aya) loads and pins the XDP program itself.
+nftables
+kea-dhcp4-server
+iproute2
+openssl
+tzdata
+ca-certificates
+openssh-server
+sudo
+isolinux
+syslinux-common
+syslinux-utils
+# The persistence partition (apply.CreatePersistenceOnBootMedium):
+# sfdisk and partx
+fdisk
+# systemd-logind needs D-Bus: without it the power button does nothing
+# (found booting the ISO in QEMU -- an ACPI power-off was ignored)
+dbus
+# the dnsmasq binary for fr-adblock-dns.service (DNS filtering); -base
+# has no dnsmasq.service of its own to fight over port 53
+dnsmasq-base
+# dhcpcd for IPv6 on the WAN (ROADMAP FND-1a, fr-dhcp6.service): SLAAC,
+# DHCPv6 and prefix delegation, with privilege separation. -base: no
+# dhcpcd.service of its own, nothing runs until ipv6.enabled.
+dhcpcd-base
+# `wg` for the WireGuard VPN (security-lessons G8); the kernel module
+# itself ships with Debian's kernel
+wireguard-tools
+# ifupdown: fr-first-boot.sh writes the WAN port's DHCP client to
+# /etc/network/interfaces.d and starts ifup@ for it
+ifupdown
+isc-dhcp-client
+unattended-upgrades
+# ROADMAP FND-4: firmware for Realtek NICs (rtl_nic/). Many Realtek
+# revisions (RTL8125, the later RTL8168s) need it to work at all, or to
+# work properly, and they are the commonest NICs in the homelab boxes
+# FR_OS targets. Listed explicitly because live-build's own firmware
+# collection is off (auto/config); it is from non-free-firmware, which the
+# archive areas already include.
+firmware-realtek

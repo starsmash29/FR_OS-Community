@@ -845,3 +845,25 @@ hold the sandbox `systemd/sandbox_test.go` checks; two exceptions are
 named there with their reason: `fr-persistence-setup.service` sees the
 devices (it partitions the boot medium), and `fr-first-boot.service` may
 open a packet socket (the DHCP probe).
+
+## 2026-11-14: the installer image (phase 4f-2b)
+
+No recorded case changes: the image is checked by booting it, not by
+replay.
+
+- **The binaries are static.** The Go binaries are built with
+  `CGO_ENABLED=0`, the Rust ones for `x86_64-unknown-linux-musl`, so
+  they run on the image's Debian bookworm whatever glibc the build host
+  has (CI builds on ubuntu-24.04).
+- **No Python on the router.** 1.x installed python3, pip, PyYAML and
+  its wheel; 2.x installs none of them. `bpftool` and `libbpf1` go too:
+  `fr-xdp` loads and pins the XDP program itself. `ifupdown` and
+  `isc-dhcp-client` come in by name, as they did with 1.x's Python
+  dependencies pulling them in.
+- **The boot test boots four times, not ten.** 1.x's boots 5 to 10 test
+  a kernel update with its fallback (phase 4f-3), and its checks of the
+  signed build (SEC-15's integrity check, SEC-22/29's planted files,
+  SEC-12's refused update) test the signed release and the update
+  helper (phase 4f-4); they come back with those phases. Every other
+  check of boots 1 to 4 is kept as 1.x has it.
+

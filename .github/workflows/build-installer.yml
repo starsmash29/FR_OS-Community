@@ -1,0 +1,122 @@
+name: Build installer ISO
+
+# The FR_OS image, built and booted in QEMU (installer/qemu-boot-test.py).
+# A full live-build run downloads and assembles an entire Debian system
+# (tens of minutes, real bandwidth), so it runs by hand from the Actions
+# tab, and on a pull request only when what goes into the image changes.
+#
+# Test builds only: the ISO is unsigned. Signing a release and publishing
+# it come with phase 4f-4 (the release signing key is never here).
+
+on:
+  workflow_dispatch:
+    inputs:
+      boot_test:
+        description: "Boot the ISO in QEMU with BIOS and with UEFI (installer/qemu-boot-test.py)"
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - "installer/**"
+      - "scripts/**"
+      - "systemd/**"
+      - ".github/workflows/build-installer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CGO_ENABLED: "0"
+      BOOT_TEST: ${{ github.event_name == 'pull_request' || inputs.boot_test }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchains, as ci.yml's: Go from go.mod, Rust from
+      # rust-toolchain.toml (with the musl target the image's binaries
+      # are linked against), the eBPF crate's nightly and bpf-linker.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Rust toolchains
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+          cd crates/fros-xdp-ebpf && (rustup show active-toolchain || rustup toolchain install)
+      - name: bpf-linker 0.13.0, against the pinned nightly's LLVM
+        run: |
+          lib=$(cd crates/fros-xdp-ebpf && rustc --print sysroot)/lib
+          llvm=$(basename "$(ls "$lib"/libLLVM*.so)" .so)
+          RUSTFLAGS="-L $lib -l dylib=${llvm#lib} -C link-arg=-Wl,-rpath,$lib" \
+            cargo install bpf-linker --version 0.13.0 --locked --no-default-features --features llvm-23,no-llvm-linking
+
+      - name: Build what the image installs (installer/build-binaries.sh)
+        run: installer/build-binaries.sh "$RUNNER_TEMP/stage"
+
+      - name: Install live-build tooling
+        run: |
+          sudo apt-get update
+          # The list from installer/build-live-image.sh's header --
+          # syslinux-common provides the ldlinux/libcom32/libutil modules
+          # the isolinux bootloader directory links to.
+          sudo apt-get install -y \
+            live-build debootstrap xorriso squashfs-tools isolinux \
+            syslinux-common syslinux-efi syslinux-utils librsvg2-bin \
+            grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools \
+            debian-archive-keyring
+
+      - name: Build hybrid live/installer ISO
+        run: sudo ./installer/build-live-image.sh --stage "$RUNNER_TEMP/stage"
+
+      - name: Name the ISO
+        id: iso
+        run: |
+          name="FR_OS-2.0.0-dev-${GITHUB_SHA::12}-amd64.iso"
+          sudo mv installer/live-build/binary.hybrid.iso "$name"
+          sudo chown "$(id -u):$(id -g)" "$name"
+          {
+            sha256sum "$name"
+            echo
+            echo "# FR_OS test build (unsigned) -- hybrid BIOS/UEFI live image, amd64."
+            echo "# Built by GitHub Actions from commit ${GITHUB_SHA} (${GITHUB_REF_NAME})."
+            echo "# Verify: sha256sum -c SHA256SUMS"
+          } > SHA256SUMS
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          cat SHA256SUMS
+
+      - name: Boot test in QEMU with BIOS (persistence, first boot, webUI, fallback)
+        if: ${{ env.BOOT_TEST == 'true' }}
+        run: |
+          # radvd and kea-dhcp6 are the test's IPv6 provider on the WAN
+          # (ROADMAP FND-1a): RA, DHCPv6 and prefix delegation.
+          sudo apt-get install -y qemu-system-x86 ovmf radvd kea-dhcp6-server wireguard-tools
+          sudo python3 installer/qemu-boot-test.py "${{ steps.iso.outputs.name }}" --kvm --workdir qemu-test
+
+      # The same boots from a fresh stick with UEFI firmware (OVMF): both
+      # firmwares boot from the same GRUB menu.
+      - name: Boot test in QEMU with UEFI
+        if: ${{ env.BOOT_TEST == 'true' }}
+        run: sudo python3 installer/qemu-boot-test.py "${{ steps.iso.outputs.name }}" --kvm --uefi --workdir qemu-test-uefi
+
+      - name: Upload QEMU logs
+        if: ${{ always() && env.BOOT_TEST == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-boot-test-logs
+          path: |
+            qemu-test/boot*.log
+            qemu-test-uefi/boot*.log
+          if-no-files-found: ignore
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fr-os-installer
+          path: |
+            ${{ steps.iso.outputs.name }}
+            SHA256SUMS
+          if-no-files-found: error
