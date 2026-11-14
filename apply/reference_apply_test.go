@@ -63,6 +63,65 @@ type fakeSystem struct {
 	passed    map[int]int
 	// xdp answers the step's fr-xdp calls, in order (reference_xdp_test.go).
 	xdp []xdpAnswer
+	// accounts are the case's users and groups (nil: none), made the
+	// number created so far.
+	accounts *reference.ApplyAccounts
+	made     int
+}
+
+// firstID is the first id an account the case creates gets.
+const firstID = 64900
+
+// accountChange is what useradd, groupadd, usermod and gpasswd change,
+// as the recording's fake does.
+func (f *fakeSystem) accountChange(argv []string) {
+	a := f.accounts
+	n := len(argv)
+	switch {
+	case n >= 3 && argv[0] == "useradd" && argv[n-2] == "--":
+		id := firstID + f.made
+		f.made++
+		a.Users[argv[n-1]] = id
+		if slices.Contains(argv, "--user-group") {
+			a.Groups[argv[n-1]] = &reference.ApplyGroup{GID: id}
+		}
+	case n >= 3 && argv[0] == "groupadd" && argv[n-2] == "--":
+		id := firstID + f.made
+		f.made++
+		a.Groups[argv[n-1]] = &reference.ApplyGroup{GID: id}
+	case n >= 6 && slices.Equal(argv[:3], []string{"usermod", "--append", "--groups"}) && argv[n-2] == "--" &&
+		a.Groups[argv[3]] != nil:
+		g := a.Groups[argv[3]]
+		g.Members = append(g.Members, argv[n-1])
+	case n >= 4 && argv[0] == "gpasswd" && argv[1] == "--delete" && a.Groups[argv[3]] != nil:
+		g := a.Groups[argv[3]]
+		g.Members = slices.DeleteFunc(g.Members, func(m string) bool { return m == argv[2] })
+	}
+}
+
+func (f *fakeSystem) user(name string) (int, bool) {
+	if f.accounts == nil {
+		return 0, false
+	}
+	uid, ok := f.accounts.Users[name]
+	return uid, ok
+}
+
+func (f *fakeSystem) group(name string) (int, []string, bool) {
+	if f.accounts == nil || f.accounts.Groups[name] == nil {
+		return 0, nil, false
+	}
+	g := f.accounts.Groups[name]
+	return g.GID, slices.Clone(g.Members), true
+}
+
+// chown changes nothing; with the case's accounts it is recorded as a
+// call ["chown", path, uid, gid].
+func (f *fakeSystem) chown(path string, uid, gid int) error {
+	if f.accounts != nil {
+		f.calls = append(f.calls, call{argv: []string{"chown", f.norm(path), strconv.Itoa(uid), strconv.Itoa(gid)}})
+	}
+	return nil
 }
 
 type call struct {
@@ -92,6 +151,7 @@ func (f *fakeSystem) run(c apply.Cmd) (apply.Result, error) {
 		f.xdp = f.xdp[1:]
 		return a.res, a.err
 	}
+	res := apply.Result{}
 	for i, a := range f.table {
 		if len(a.Argv) <= len(argv) && slices.Equal(argv[:len(a.Argv)], a.Argv) {
 			if f.passed[i] < a.After {
@@ -104,10 +164,14 @@ func (f *fakeSystem) run(c apply.Cmd) (apply.Result, error) {
 			case "timeout":
 				return apply.Result{}, &apply.TimeoutError{Argv: c.Argv, Timeout: c.Timeout}
 			}
-			return apply.Result{Stdout: a.Stdout, Stderr: a.Stderr, Code: a.RC}, nil
+			res = apply.Result{Stdout: a.Stdout, Stderr: a.Stderr, Code: a.RC}
+			break
 		}
 	}
-	return apply.Result{}, nil
+	if res.Code == 0 && f.accounts != nil {
+		f.accountChange(argv)
+	}
+	return res, nil
 }
 
 // gro and setGRO are the GRO ioctl as the recording's pseudo-call: rc
@@ -158,6 +222,12 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	tmp := filepath.Clean(os.TempDir())
 	f := &fakeSystem{root: root, tmp: tmp, table: c.Table, random: random, passed: map[int]int{},
 		tmpName: regexp.MustCompile(regexp.QuoteMeta(tmp) + `/tmp[A-Za-z0-9_]+`)}
+	if c.Accounts != nil {
+		f.accounts = &reference.ApplyAccounts{Users: maps.Clone(c.Accounts.Users), Groups: map[string]*reference.ApplyGroup{}}
+		for name, g := range c.Accounts.Groups {
+			f.accounts.Groups[name] = &reference.ApplyGroup{GID: g.GID, Members: slices.Clone(g.Members)}
+		}
+	}
 	materialize(t, root, c.Setup)
 
 	sec, frac := math.Modf(c.Now)
@@ -179,7 +249,9 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	version := [3]int{int(openssl[0].(float64)), int(openssl[1].(float64)), int(openssl[2].(float64))}
 	sys.OpenSSLVersion = func() ([3]int, string) { return version, openssl[3].(string) }
 	sys.Sleep = func(time.Duration) {}
-	sys.Chown = func(string, int, int) error { return nil } // as the recording's: no accounts
+	sys.Chown = f.chown
+	sys.User = f.user
+	sys.Group = f.group
 	sys.Fetch = func(url string) ([]byte, error) { return fetchAnswer(c.Fetch, url) }
 	p := sys.Paths
 	s := &helper.Server{Env: helper.Env{
@@ -209,6 +281,17 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 				got = map[string]any{"messages": messages}
 			}
 			sys.Now = func() time.Time { return now }
+		} else if argv, ok := cliOf(t, step.Request); ok {
+			// firewall-cli: its exit status and what it printed.
+			for i := range argv {
+				argv[i] = strings.ReplaceAll(argv[i], "@ROOT@", root)
+			}
+			var stdout, stderr strings.Builder
+			code := s.CLI(argv, &stdout, &stderr)
+			where := fmt.Sprintf("step %d %s", i, step.Request)
+			checkCalls(t, where, f.calls[start:], calls)
+			checkCLI(t, where, step, code, f.norm(stdout.String()), f.norm(stderr.String()))
+			continue
 		} else {
 			line := append(bytes.Clone(step.Request), '\n')
 			got, err = s.Answer(bufio.NewReader(bytes.NewReader(line)), 1, 0)
@@ -255,6 +338,64 @@ func samePythonJSONError(got, want string) bool {
 	wm, wok := msg(want)
 	m := pythonJSONError.FindStringSubmatch(wm)
 	return m != nil && !gok && !wok && strings.HasPrefix(gm, m[1])
+}
+
+// cliOf is a firewall-cli step's argv.
+func cliOf(t *testing.T, request jsontext.Value) ([]string, bool) {
+	var r map[string]any
+	if err := json.Unmarshal(request, &r); err != nil {
+		t.Fatal(err)
+	}
+	list, ok := r["cli"].([]any)
+	if !ok {
+		return nil, false
+	}
+	argv := make([]string, len(list))
+	for i, a := range list {
+		argv[i] = a.(string)
+	}
+	return argv, true
+}
+
+// cliReply is what a firewall-cli step recorded.
+type cliReply struct {
+	Code   int    `json:"code"`
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+}
+
+// checkCLI holds firewall-cli to 1.x: the same exit status and output.
+// A command line argparse refuses (2) is held to its status only: the
+// usage text is 2.x's own; and where 1.x died on an exception
+// (traceback), 2.x exits 1 with a line saying what (decisions.md,
+// "phase 4f-1").
+func checkCLI(t *testing.T, where string, step reference.ApplyStep, code int, stdout, stderr string) {
+	t.Helper()
+	if step.Raised != "" {
+		if code != 1 {
+			t.Errorf("%s: 1.x raised %s (%s); exit %d, want 1\nstdout %q\nstderr %q", where, step.Raised, step.Error,
+				code, stdout, stderr)
+		}
+		return
+	}
+	var want cliReply
+	if err := json.Unmarshal(step.Reply, &want); err != nil {
+		t.Fatal(err)
+	}
+	if code != want.Code {
+		t.Errorf("%s: exit %d, want %d\nstdout %q\nstderr %q\nwant stdout %q\nwant stderr %q", where, code,
+			want.Code, stdout, stderr, want.Stdout, want.Stderr)
+		return
+	}
+	if want.Code == 2 {
+		return
+	}
+	if stdout != want.Stdout {
+		t.Errorf("%s: stdout\n got %q\nwant %q", where, short(stdout), short(want.Stdout))
+	}
+	if stderr != want.Stderr {
+		t.Errorf("%s: stderr\n got %q\nwant %q", where, short(stderr), short(want.Stderr))
+	}
 }
 
 func waitOf(t *testing.T, request jsontext.Value) (float64, bool) {
@@ -382,6 +523,20 @@ func materialize(t *testing.T, root string, files map[string]*reference.ApplyFil
 		}
 		var data []byte
 		switch {
+		case e.Size > 0:
+			mode, _ := strconv.ParseUint(strings.TrimPrefix(e.Mode, "0o"), 8, 32)
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fs.FileMode(mode))
+			if err == nil {
+				err = f.Truncate(e.Size)
+				f.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.Chmod(path, fs.FileMode(mode))
+			continue
+		case e.Text != nil && strings.Contains(*e.Text, setupFingerprint):
+			data = []byte(strings.ReplaceAll(*e.Text, setupFingerprint, fingerprintOf(t, root, files)))
 		case e.Text != nil:
 			data = []byte(*e.Text)
 		case e.Hex != "":
@@ -395,6 +550,31 @@ func materialize(t *testing.T, root string, files map[string]*reference.ApplyFil
 		}
 		os.Chmod(path, fs.FileMode(mode))
 	}
+}
+
+// setupFingerprint is, in a setup file, the fingerprint of the setup's
+// config.yaml as each implementation computes its own (decisions.md,
+// "The schedule record's fingerprint").
+const setupFingerprint = "@FP@"
+
+func fingerprintOf(t *testing.T, root string, files map[string]*reference.ApplyFile) string {
+	e := files["etc/fr_os/config.yaml"]
+	if e == nil || e.Text == nil {
+		t.Fatal("a fingerprint with no config.yaml")
+	}
+	raw, err := config.LoadYAML(*e.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, err := apply.ConfigFingerprint(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fp
 }
 
 func snapshot(t *testing.T, f *fakeSystem, root string) map[string]*reference.ApplyFile {

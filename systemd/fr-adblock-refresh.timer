@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily FR_OS ad-block list refresh
+Documentation=https://github.com/starsmash29/FR_OS-Community
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target

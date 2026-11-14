@@ -1,0 +1,36 @@
+[Unit]
+Description=FR_OS resolver query log size cap (firewall-cli dns-log-trim)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/fr_os/firewall-cli dns-log-trim
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root with CAP_DAC_OVERRIDE alone: the log is dnsmasq's, 0640
+# root:fr_os-feeds; only its directory is writable, no network.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+ProtectSystem=strict
+ReadWritePaths=-/var/log/fr_os-dns
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+RemoveIPC=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX

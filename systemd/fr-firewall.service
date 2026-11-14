@@ -1,0 +1,49 @@
+[Unit]
+Description=FR_OS firewall ruleset, applied at boot (firewall-cli apply --fail-closed)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+# Before the network comes up: the router is filtered before any
+# interface is. With no config, or an apply that fails with no FR_OS
+# ruleset loaded, the drop-everything baseline is loaded instead
+# (security-lessons A3); an apply left waiting for confirmation when the
+# router went down is reverted (ROADMAP SEC-26).
+Wants=network-pre.target
+Before=network-pre.target shutdown.target
+After=nftables.service
+Conflicts=shutdown.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardInput=null
+ExecStart=/usr/libexec/fr_os/firewall-cli apply --fail-closed /etc/fr_os/config.yaml
+ExecReload=/usr/libexec/fr_os/firewall-cli apply --fail-closed /etc/fr_os/config.yaml
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root, because this is an apply: the apply-helper's own sandbox, with a
+# runtime directory of its own for temporary files (PrivateTmp would
+# order it after the file systems it runs before).
+ProtectSystem=strict
+ReadWritePaths=-/etc/fr_os -/etc/kea -/etc/ssh/sshd_config.d -/usr/local/share/fr_os -/sys/fs/bpf -/var/log/fr_os
+RuntimeDirectory=fr-firewall
+Environment=TMPDIR=/run/fr-firewall
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=~@clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_IPC_LOCK CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID CAP_KILL
+
+[Install]
+WantedBy=sysinit.target

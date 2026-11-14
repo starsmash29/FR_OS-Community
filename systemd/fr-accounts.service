@@ -1,0 +1,42 @@
+[Unit]
+Description=FR_OS unprivileged accounts and state directories (firewall-cli ensure-accounts)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+# Every unit that runs as one of these accounts pulls this in, so an
+# update that brings new units also brings the account they need.
+DefaultDependencies=no
+After=local-fs.target systemd-sysusers.service
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/fr_os/firewall-cli ensure-accounts
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root, because it runs useradd, groupadd, usermod and gpasswd: they
+# write the account files in /etc. It also moves the feeds and the
+# helper's socket to fr_os-feeds and makes the state directories. No
+# network at all.
+ProtectSystem=strict
+ReadWritePaths=/etc -/var/log/fr_os -/var/log/fr_os-sni -/var/log/fr_os-dns -/run/fr_os
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_AUDIT_WRITE

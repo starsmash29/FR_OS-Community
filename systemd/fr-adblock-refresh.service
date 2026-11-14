@@ -1,0 +1,37 @@
+[Unit]
+Description=FR_OS ad-block list refresh (firewall-cli adblock-refresh)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+
+[Service]
+Type=oneshot
+# --scheduled: nothing is fetched while ad-blocking is off (ROADMAP
+# SEC-21, security-lessons G11).
+ExecStart=/usr/libexec/fr_os/firewall-cli adblock-refresh --scheduled /etc/fr_os/config.yaml
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root with no capability at all: it writes the lists under /etc/fr_os,
+# and talks only TCP (the lists) and to Unix sockets.
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/etc/fr_os
+ProtectKernelTunables=yes
+ProtectProc=invisible
+RemoveIPC=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

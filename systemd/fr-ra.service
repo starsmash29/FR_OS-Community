@@ -1,0 +1,44 @@
+[Unit]
+Description=FR_OS Router Advertisements on the LAN (an RA-only dnsmasq instance, ROADMAP FND-1b)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+After=network.target fr-dhcp6.service
+ConditionPathExists=/etc/fr_os/dnsmasq_ra.conf
+
+[Service]
+Type=simple
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Its own dynamic account: RAs need CAP_NET_RAW and, for enable-ra,
+# CAP_NET_ADMIN; nothing else.
+DynamicUser=yes
+User=fr_os-ra
+Group=fr_os-ra
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/fr_os/dnsmasq_ra.conf
+Restart=on-failure
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
