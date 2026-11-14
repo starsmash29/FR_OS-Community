@@ -10,6 +10,9 @@ publish = false
 
 [dependencies]
 fros-sensor = { path = "../fros-sensor" }
+# IP_MULTICAST_IF, which std does not set: discovery sends its query
+# out of each IoT interface in turn.
+socket2 = "=0.6.3"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }

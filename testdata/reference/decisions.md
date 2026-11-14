@@ -478,7 +478,7 @@ Decided:
 The helper calls (`dhcp_leases`, `iot_sync_isolation`), the mDNS
 socket (`discover`), writing the inventory file and what the daemon
 does when a scan hits an exception 1.x doesn't catch (recorded here by
-name, as `Crash`) come with the daemon (phase 4e).
+name, as `Crash`) came with the daemon (phase 4e-3, below).
 
 ## 2026-11-13: the XDP program's kernel side (phase 4d-1)
 
@@ -695,3 +695,46 @@ binaries on real files and, for fr-ai-ids, a real Unix socket.
   aren't UTF-8 as U+FFFD**; a default route whose gateway `int(x, 16)`
   reads as negative or past 32 bits is skipped, where 1.x dies
   (`OverflowError` from `to_bytes`). The kernel writes neither.
+
+## 2026-11-14: the IoT scan (phase 4e-3)
+
+`fr-iot-scan` is 1.x's `frfw.iot.scanner.main`, in Rust: one scan,
+started by `fr-iot-scan.timer` (2 minutes after boot, then every 10,
+as 1.x) and by the webUI's "Scan now" (the helper's `iot_scan`).
+`testdata/reference/sensord.jsonl` records the IoT part of each
+config's view (op `view`), 1.x's scan with its two helper calls going
+through its real client to a fake apply-helper answering given bytes
+(op `iotscan`), and 1.x's mDNS discovery on a real UDP socket aimed at
+a fake responder on loopback that answers from given addresses and
+ports (op `mdns`). `apply/reference_sensorview_test.go` and
+`crates/fros-iot/tests/system.rs` replay it: the same view; the same
+requests, messages and inventory, or the same exception; the same
+query (less its random id), sent as many times, and the same services
+found, or the same error. `crates/fros-iot/tests/e2e.rs` runs the real
+binary against a fake helper and a fake responder.
+
+- **The sensors' view gains `iot`**, the shape phase 4c decided: the
+  switch, every interface in an IoT zone in config order with its
+  static address or null (1.x's `_iot_interfaces`), the trusted and
+  isolated MACs as the config normalizes them, `auto_isolate` and the
+  isolation mode. Every recorded view matches.
+- **Where 1.x's scan dies, `fr-iot-scan` prints
+  `error: scan failed: <exception>`, exits 1 and leaves the last
+  inventory as it was** (owner's go-ahead on the plan): a helper reply
+  that isn't UTF-8 or nests too deep (`HelperError::Raised`), one that
+  isn't an object, and the scan's other `Crash` cases. 1.x dies with a
+  traceback and, as here, writes nothing. A view that is missing, not
+  JSON, written from a refused config or without a valid `iot` member
+  is an `error:` line and exit 1 too (1.x dies reading its config).
+- **mDNS goes through `socket2`** (`=0.6.3`, MIT/Apache-2.0), for the
+  one option std doesn't set: `IP_MULTICAST_IF`, so the query leaves
+  through each IoT interface in turn. Everything else is 1.x's: the
+  socket bound to port 53530 on every address, TTL 255, the query
+  once per address, answers until 2 seconds are up or 512 have come,
+  read into a 9000-byte buffer (a longer datagram is cut, as 1.x's
+  `recvfrom`), only from port 5353 and never from the router's own
+  addresses, at most 64 service types per host. The query id is random,
+  as 1.x's; the cases record the query without it.
+- **The inventory is written as 1.x writes it** (`<path>.tmp`, then
+  moved over the file, its directory made first); a write that fails
+  is an `error:` line after the messages and exit 1, where 1.x dies.

@@ -11,9 +11,10 @@
 //!
 //! mDNS answers and DHCP hostnames are text any LAN host can shape, so
 //! every parser here is total over its input and bounded (tests/props.rs).
-//! The library does no I/O of its own beyond reading a named file:
-//! the helper calls and the mDNS socket are the daemon's, through
-//! [`scan::ScanIo`].
+//! The scan decides and does no I/O of its own: what it reads and asks
+//! comes through [`scan::ScanIo`], which [`system::SystemIo`] answers
+//! on the router (the helper's socket, the mDNS socket, the files) for
+//! `fr-iot-scan`.
 
 pub mod arp;
 pub mod classify;
@@ -21,6 +22,7 @@ pub mod csv;
 pub mod mdns;
 pub mod oui;
 pub mod scan;
+pub mod system;
 
 pub use arp::{ArpEntry, parse_arp_table, read_arp_table};
 pub use classify::{Classification, Observation, classify};

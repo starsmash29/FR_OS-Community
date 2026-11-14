@@ -22,14 +22,18 @@ import (
 //	 "app_control": {"sources": ["dns"?, "sni"?]},
 //	 "ai_ids": {"enabled", "excluded_macs", "excluded_ips", "internal_networks",
 //	            "infrastructure", "threat_categories", "query_log",
-//	            "quarantine_duration_seconds"}}
+//	            "quarantine_duration_seconds"},
+//	 "iot": {"enabled", "interfaces": [{"device", "address"}], "trusted_macs",
+//	         "isolated_macs", "auto_isolate", "isolation_mode"}}
 //
 // app_control and ai_ids are what 1.x's fr-appid and fr-ai-ids derive
 // from the config (testdata/reference/sensord.jsonl, "view"): the
 // sources fr-appid follows, the addresses fr-ai-ids excludes, scores
 // and never quarantines (but those it reads from the routing table and
 // resolv.conf at run time), and the threat categories whose answers it
-// counts.
+// counts. iot is the shape decided in phase 4c (crates/fros-iot's
+// View): the interfaces of the IoT zones in config order, an address
+// as "a.b.c.d/len" or null.
 func SensorView(raw config.Value) string {
 	view := config.NewMap()
 	c, err := config.Parse(raw)
@@ -52,6 +56,7 @@ func SensorView(raw config.Value) string {
 		view.Set("tls_fingerprint", t)
 		view.Set("app_control", appControlView(c))
 		view.Set("ai_ids", aiIdsView(c))
+		view.Set("iot", iotView(c))
 	}
 	text, err := config.PyJSON(view, -1, false)
 	if err != nil {
@@ -162,4 +167,36 @@ func texts(list []string) []config.Value {
 		out[i] = t
 	}
 	return out
+}
+
+// iotView is what 1.x's frfw.iot.scanner takes from the config: the
+// interfaces whose zone is an IoT zone (`_iot_interfaces`), in config
+// order, and the iot settings.
+func iotView(c *config.Config) *config.Map {
+	zones := map[string]bool{}
+	for _, z := range c.Iot.Zones {
+		zones[z] = true
+	}
+	interfaces := []config.Value{}
+	for _, i := range c.Interfaces.Values() {
+		if !zones[i.Zone] {
+			continue
+		}
+		m := config.NewMap()
+		m.Set("device", i.Device)
+		if i.Address == "" {
+			m.Set("address", nil)
+		} else {
+			m.Set("address", i.Address)
+		}
+		interfaces = append(interfaces, m)
+	}
+	m := config.NewMap()
+	m.Set("enabled", c.Iot.Enabled)
+	m.Set("interfaces", interfaces)
+	m.Set("trusted_macs", texts(c.Iot.TrustedMacs))
+	m.Set("isolated_macs", texts(c.Iot.IsolatedMacs))
+	m.Set("auto_isolate", c.Iot.AutoIsolate)
+	m.Set("isolation_mode", string(c.Iot.IsolationMode))
+	return m
 }

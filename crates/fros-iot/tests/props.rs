@@ -11,6 +11,7 @@ use fros_iot::{
     ArpEntry, Crash, Observation, ScanIo, VendorDb, View, build_query, classify, normalize_mac,
     parse_arp_table, parse_services, parse_vendor_db, run_scan,
 };
+use fros_sensor::helper::HelperError;
 use fros_sensor::pyjson::{self, Dict, Value};
 use proptest::prelude::*;
 
@@ -127,7 +128,7 @@ struct Random {
 }
 
 impl ScanIo for Random {
-    fn leases(&mut self) -> Result<Value, String> {
+    fn leases(&mut self) -> Result<Value, HelperError> {
         Ok(self.leases.clone())
     }
     fn mdns(&mut self, _addresses: &[String]) -> Result<MdnsResults, String> {
@@ -142,7 +143,7 @@ impl ScanIo for Random {
     fn oui_path(&self) -> String {
         "/usr/share/ieee-data/oui.csv".into()
     }
-    fn sync(&mut self, _macs: &[String]) -> Result<Value, String> {
+    fn sync(&mut self, _macs: &[String]) -> Result<Value, HelperError> {
         Ok(self.sync.clone())
     }
 }

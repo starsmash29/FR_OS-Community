@@ -15,6 +15,7 @@ use fros_iot::{
     normalize_mac, parse_arp_table, parse_services, parse_vendor_db, read_arp_table, resync_wanted,
     run_scan, vendor_for,
 };
+use fros_sensor::helper::HelperError;
 use fros_sensor::pyjson::{self, Dict, Value};
 use fros_sensor::reference::{cases, clip, field, int, number, opt_text, report, strs, text};
 
@@ -161,9 +162,11 @@ fn check_classify(case: &Dict) -> Result<(), String> {
 }
 
 /// A helper answer as recorded: `{"raise": text}` is the HelperError.
-fn answer(spec: &Value) -> Result<Value, String> {
+fn answer(spec: &Value) -> Result<Value, HelperError> {
     match spec {
-        Value::Dict(d) if d.get("raise").is_some() => Err(text(field(d, "raise")).to_owned()),
+        Value::Dict(d) if d.get("raise").is_some() => {
+            Err(HelperError::Transport(text(field(d, "raise")).to_owned()))
+        }
         other => Ok(other.clone()),
     }
 }
@@ -174,7 +177,7 @@ struct Recorded<'a> {
 }
 
 impl ScanIo for Recorded<'_> {
-    fn leases(&mut self) -> Result<Value, String> {
+    fn leases(&mut self) -> Result<Value, HelperError> {
         answer(field(self.case, "leases"))
     }
 
@@ -206,7 +209,7 @@ impl ScanIo for Recorded<'_> {
         text(field(self.case, "oui_path")).to_owned()
     }
 
-    fn sync(&mut self, macs: &[String]) -> Result<Value, String> {
+    fn sync(&mut self, macs: &[String]) -> Result<Value, HelperError> {
         self.sync_calls.push(strings(macs.iter().cloned()));
         match field(self.case, "sync") {
             Value::Null => Ok(Value::Dict(Dict(vec![

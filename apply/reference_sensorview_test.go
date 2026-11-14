@@ -35,7 +35,7 @@ func TestReferenceSensorView(t *testing.T) {
 		}
 		gm, _ := got.(*config.Map)
 		wm, _ := want.(*config.Map)
-		for _, key := range []string{"app_control", "ai_ids"} {
+		for _, key := range []string{"app_control", "ai_ids", "iot"} {
 			g, _ := gm.Get(key)
 			w, _ := wm.Get(key)
 			gt, _ := config.PyJSON(g, -1, false)

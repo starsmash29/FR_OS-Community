@@ -54,6 +54,12 @@ var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-reve
 
 // service is a unit's [Service]: each key and every value it is given.
 func service(t *testing.T, name string) map[string][]string {
+	return section(t, name, "[Service]")
+}
+
+// section is one section of a unit file: each key and every value it
+// is given.
+func section(t *testing.T, name, want string) map[string][]string {
 	text, err := os.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +72,7 @@ func service(t *testing.T, name string) map[string][]string {
 		case line == "" || strings.HasPrefix(line, "#"):
 		case strings.HasPrefix(line, "["):
 			section = line
-		case section == "[Service]":
+		case section == want:
 			key, value, _ := strings.Cut(line, "=")
 			out[key] = append(out[key], value)
 		}
@@ -193,6 +199,42 @@ func TestLogReadingSensorDaemonsHoldNothing(t *testing.T) {
 		if !slices.Contains(s["SystemCallFilter"], "~@privileged") {
 			t.Errorf("%s: SystemCallFilter=%q, want ~@privileged too", name, s["SystemCallFilter"])
 		}
+	}
+}
+
+// The IoT scan parses mDNS answers and DHCP hostnames, so it runs as
+// fr_os-sensor from the start with no capability at all, asks the
+// apply-helper for its two privileged steps, talks UDP only for mDNS
+// and writes only under /etc/fr_os/sensors (as 1.x's
+// fr-iot-scan.service); its timer starts it as 1.x's does.
+func TestTheIoTScanHoldsNothing(t *testing.T) {
+	s := service(t, "fr-iot-scan.service")
+	for key, want := range map[string]string{"Type": "oneshot", "User": "fr_os-sensor", "Group": "fr_os-sensor",
+		"SupplementaryGroups": "fr_os-feeds", "CapabilityBoundingSet": "", "ReadWritePaths": "-/etc/fr_os/sensors",
+		"ProtectKernelTunables": "yes", "ExecStart": "/usr/libexec/fr_os/fr-iot-scan"} {
+		if got := last(s, key); got != want {
+			t.Errorf("%s=%q, want %q", key, got, want)
+		}
+	}
+	if got := strings.Fields(last(s, "RestrictAddressFamilies")); !slices.Equal(slices.Sorted(slices.Values(got)),
+		[]string{"AF_INET", "AF_INET6", "AF_UNIX"}) {
+		t.Errorf("RestrictAddressFamilies=%q", got)
+	}
+	if _, ok := s["AmbientCapabilities"]; ok {
+		t.Error("ambient capabilities")
+	}
+	if !slices.Contains(s["SystemCallFilter"], "~@privileged") {
+		t.Errorf("SystemCallFilter=%q, want ~@privileged too", s["SystemCallFilter"])
+	}
+	timer := section(t, "fr-iot-scan.timer", "[Timer]")
+	for key, want := range map[string]string{"OnBootSec": "2min", "OnUnitActiveSec": "10min",
+		"RandomizedDelaySec": "30"} {
+		if got := last(timer, key); got != want {
+			t.Errorf("fr-iot-scan.timer: %s=%q, want %q", key, got, want)
+		}
+	}
+	if got := last(section(t, "fr-iot-scan.timer", "[Install]"), "WantedBy"); got != "timers.target" {
+		t.Errorf("fr-iot-scan.timer: WantedBy=%q", got)
 	}
 }
 
