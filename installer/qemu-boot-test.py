@@ -2008,7 +2008,9 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
               "...and says it moved a rule ahead of the lan-to-wan accept that would have matched it first "
               f"(ROADMAP SEC-30): {placements}")
         rules_page = get(opener, "/rules")
-        order = re.findall(r"(boot-test-drop-v6|boot-test-ztna-v6|boot-test-ztna-v6-closed|lan-to-wan)", rules_page)
+        # Whole names only: "boot-test-ztna-v6" is a prefix of its closing
+        # rule's name, which a plain alternation would read as it.
+        order = re.findall(r"(?<![\w-])(boot-test-drop-v6|boot-test-ztna-v6-closed|boot-test-ztna-v6|lan-to-wan)(?![\w-])", rules_page)
         order = [name for i, name in enumerate(order) if name not in order[:i]]  # first mention of each
         check(order == ["boot-test-drop-v6", "boot-test-ztna-v6", "boot-test-ztna-v6-closed", "lan-to-wan"],
               "the Rules screen lists the three IPv6 rules ahead of lan-to-wan, the gated accept before its "
