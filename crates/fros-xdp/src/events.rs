@@ -183,9 +183,9 @@ pub fn format_event_json(event: &SniEvent, ts: f64) -> String {
 /// ROADMAP SEC-4): mode 0640 on every open, each line one write() with
 /// O_APPEND so a reader never sees half of one, emptied once the next
 /// line would take it past `max_bytes` (readers follow with `tail -F`,
-/// which notices and starts again from the top). Who owns it (root, the
-/// readers' group) is the logger daemon's to set before it drops its
-/// privileges.
+/// which notices and starts again from the top). Opened by the logger
+/// while still root, the file is root's, so only this open file can
+/// write it after the logger becomes the readers' account.
 pub struct EventFile {
     file: File,
     max_bytes: u64,
@@ -198,6 +198,13 @@ impl EventFile {
             .create(true)
             .mode(0o640)
             .open(path)?;
+        // The group is the process's own (the unit's Group=, the
+        // readers'), set on every open, so a file an earlier version
+        // made with another group is moved over too (ROADMAP SEC-11).
+        if nix::unistd::geteuid().is_root() {
+            nix::unistd::fchown(&file, None, Some(nix::unistd::getegid()))
+                .map_err(io::Error::from)?;
+        }
         file.set_permissions(Permissions::from_mode(0o640))?;
         Ok(EventFile { file, max_bytes })
     }

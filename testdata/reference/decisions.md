@@ -390,7 +390,7 @@ inventory from its state file: nine cases differ, listed by name in
   by both) and 100,000 (refused by both).
 
 The state file's size cap, and what the daemon does with what it
-restores, come with the daemon (phase 4e).
+restores, came with the daemon (phase 4e-1, below).
 
 ## 2026-11-13: application identification and AI-IDS scoring (phase 4b)
 
@@ -571,6 +571,54 @@ of the same file by `apply/reference_xdp_keys_test.go`.
   them in the apply, so a name the kernel map can't hold is refused
   with 1.x's message at the preflight, before anything changes. No case
   differs.
-- **Not yet:** the event logger daemon (who owns the event file, and
-  dropping its privileges) comes with the daemons in phase 4e;
-  `crates/fros-xdp`'s `events` module is what it will write with.
+- The event logger daemon (who owns the event file, and dropping its
+  privileges) came in phase 4e-1, below.
+
+## 2026-11-14: the SNI event logger and the TLS fingerprinting daemon (phase 4e-1)
+
+`fr-xdp-sni-logger` and `fr-tls-fp` are 1.x's `frfw.xdp.run_event_logger`
+and `frfw.tlsfp.daemon`, in Rust. `testdata/reference/tlsfpd.jsonl`
+(`reference/test_fros_tlsfpd_cases.py`) records 1.x's daemon fed ring
+buffer records at given clocks, asking a fake apply-helper that answers
+given bytes, and writing its state file; and 1.x's helper client
+(`frfw.helper.client.send_command`) alone. `crates/fros-tlsfp/tests/daemon.rs`
+replays it: the same requests, counts and state files, byte for byte.
+
+- **The sensors read a JSON view of the config, not the YAML copy.**
+  Next to `sensor-config.yaml` an apply writes `sensor-view.json`
+  (root:fr_os-sensor 0640, `apply.SensorView`): what each daemon reads,
+  checked by the config package, or `{"config_error": message}` for a
+  config the checks refuse. It holds `tls_fingerprint` now; the
+  daemons of phases 4e-2 and 4e-3 add their own members. The Rust daemons would otherwise need a
+  second YAML reader and a second copy of the checks. With a
+  `config_error` the daemon keeps the settings it has, as 1.x's daemon
+  keeps them when its own parse fails. The apply replay checks the view
+  against the recorded YAML copy; no case differs.
+- **A state file that can't be restored is put aside, and the daemon
+  starts afresh** (owner's decision): renamed to
+  `tls_fingerprints.json.broken`, logged, and an empty inventory with a
+  new learning period. 1.x dies at start on a file it can't restore
+  (not JSON, too deeply nested, members of the wrong type), and systemd
+  restarts it into the same crash. The cases 1.x dies on
+  (`crash` at the case) are replayed with 1.x's steps recorded without
+  the file. A file larger than 16 MiB is put aside unread, where 1.x
+  reads any size (`oversized_state_put_aside`).
+- **A helper reply that isn't a JSON object is a failed quarantine**:
+  `quarantine failed: the apply-helper's reply is not an object: ...`.
+  1.x dies on it (`AttributeError` on `.get`); the cases where it does
+  (`crash` at the step) end there, checked for that message.
+- **A state file that can't be written is logged and tried again at the
+  next flush.** 1.x dies and loses what it holds.
+- **A reply 1.x's client lets an exception through for** (bytes that
+  don't decode in the encoding `json.loads` guesses, nesting past the
+  recursion limit) is recorded as `raised` with the exception's name,
+  and is `HelperError::Raised` here; the daemon reports it as a failed
+  quarantine, where 1.x dies. A lone surrogate in a reply becomes
+  U+FFFD, as everywhere in FR_OS 2.
+- **The logger and the daemon drop privileges as 1.x's
+  `frfw.privdrop`**: fr_os-sensor (nobody when it doesn't exist),
+  fr_os-feeds besides, checked to have left root; the event file is
+  opened as root first, its group the process's own, mode 0640.
+  `apply/xdp_root_test.go`'s `TestXdpReadersRealAttach` runs both on a
+  real attach, as root: the drop is logged to the root-owned event file,
+  the hello fingerprinted with 1.x's JA4 and JA3, and neither keeps root.

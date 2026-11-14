@@ -22,7 +22,9 @@ import (
 // constants). DefaultPaths are the router's; tests point every one of
 // them into a directory of their own.
 type Paths struct {
-	Config, AppliedConfig, RejectedConfig, SensorConfig  string
+	Config, AppliedConfig, RejectedConfig, SensorConfig string
+	// SensorView is the sensor daemons' JSON view of the config (SensorView).
+	SensorView                                           string
 	ApplyPending, ApplyLock                              string
 	BackupDir, ScheduleState, WebUIListen, AuditLog      string
 	KeaConfig, XdpState                                  string
@@ -53,7 +55,7 @@ type Paths struct {
 func DefaultPaths() Paths {
 	return Paths{
 		Config: "/etc/fr_os/config.yaml", AppliedConfig: "/etc/fr_os/applied-config.yaml",
-		RejectedConfig: "/etc/fr_os/config.rejected.yaml", SensorConfig: "/etc/fr_os/sensor-config.yaml",
+		RejectedConfig: "/etc/fr_os/config.rejected.yaml", SensorConfig: "/etc/fr_os/sensor-config.yaml", SensorView: "/etc/fr_os/sensor-view.json",
 		ApplyPending: "/etc/fr_os/apply-pending.json", ApplyLock: "/etc/fr_os/.apply.lock",
 		BackupDir: BackupDir, ScheduleState: "/etc/fr_os/schedule_state.json",
 		WebUIListen: "/etc/fr_os/webui-listen.json", AuditLog: "/var/log/fr_os/audit.log",

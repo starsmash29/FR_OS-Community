@@ -7,6 +7,7 @@
 //! which tests/props.rs checks on random input.
 
 pub mod clienthello;
+pub mod daemon;
 pub mod fingerprint;
 pub mod inventory;
 pub mod reassembly;

@@ -14,7 +14,11 @@
 //!   `ip link set dev X xdpdrv|xdpgeneric pinned P`, as in 1.x.
 //! - `events`: the event and hello-copy records decoded, the event
 //!   logger's JSON line and its file, for the daemons that read the ring
-//!   buffers.
+//!   buffers;
+//! - `ring` and `privdrop`: what those daemons share, reading a pinned
+//!   ring buffer and leaving root right after opening it. The event
+//!   logger is the `fr-xdp-sni-logger` binary; `fr-tls-fp` is in
+//!   crates/fros-tlsfp.
 //!
 //! The blocklist keys are built by the Go apply (`apply.LPMKey`), which
 //! refuses a name before anything changes; `pins::sync_blocklist` takes
@@ -22,6 +26,8 @@
 
 pub mod events;
 pub mod pins;
+pub mod privdrop;
+pub mod ring;
 
 /// The kernel object's programs: the filter (attached), and the two it
 /// tail-calls through `split_prog` (index 0 and 1).

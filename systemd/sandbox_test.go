@@ -37,8 +37,10 @@ var everywhere = map[string][]string{
 // root is the services that run as root, and why. Every other service
 // runs as its own unprivileged account.
 var root = map[string]string{
-	"fr-apply-helper.service": "the privilege boundary: applies the network config",
-	"fr-apply-revert.service": "a revert is an apply: the apply-helper's own sandbox",
+	"fr-apply-helper.service":   "the privilege boundary: applies the network config",
+	"fr-apply-revert.service":   "a revert is an apply: the apply-helper's own sandbox",
+	"fr-tls-fp.service":         "opens a pinned BPF map, then becomes fr_os-sensor (fros_xdp::privdrop)",
+	"fr-xdp-sni-logger.service": "opens a pinned BPF map and its event file, then becomes fr_os-sensor",
 }
 
 // never is no service's to have.
@@ -142,6 +144,49 @@ func TestTheWebUIWritesOnlyItsOwnState(t *testing.T) {
 	}
 	if got := last(s, "User"); got != "fr_os-webui" {
 		t.Errorf("User=%q", got)
+	}
+}
+
+// The pinned-map readers hold only what opening a map and giving up root
+// take, and talk only to Unix sockets (as 1.x's
+// test_bpf_readers_hold_only_what_opening_a_map_and_dropping_root_take).
+func TestBPFReadersHoldOnlyWhatOpeningAMapAndDroppingRootTake(t *testing.T) {
+	for _, name := range []string{"fr-tls-fp.service", "fr-xdp-sni-logger.service"} {
+		s := service(t, name)
+		got := slices.Sorted(slices.Values(strings.Fields(last(s, "CapabilityBoundingSet"))))
+		if !slices.Equal(got, []string{"CAP_BPF", "CAP_SETGID", "CAP_SETUID"}) {
+			t.Errorf("%s: CapabilityBoundingSet=%q", name, got)
+		}
+		if got := last(s, "RestrictAddressFamilies"); got != "AF_UNIX" {
+			t.Errorf("%s: RestrictAddressFamilies=%q", name, got)
+		}
+		if _, ok := s["AmbientCapabilities"]; ok {
+			t.Errorf("%s: ambient capabilities", name)
+		}
+	}
+	if got := last(service(t, "fr-tls-fp.service"), "ReadWritePaths"); got != "-/etc/fr_os/sensors" {
+		t.Errorf("fr-tls-fp.service: ReadWritePaths=%q", got)
+	}
+	if got := service(t, "fr-xdp-sni-logger.service")["ReadWritePaths"]; len(got) != 0 {
+		t.Errorf("fr-xdp-sni-logger.service: ReadWritePaths=%q", got)
+	}
+}
+
+// The logger opens the event file as root, in a directory systemd makes
+// root:fr_os-feeds 0750, under a umask that leaves the file 0640: its
+// readers (fr_os-webui and fr_os-sensor, both in fr_os-feeds) read it,
+// none of them can write it (ROADMAP SEC-4, SEC-11; as 1.x's
+// test_the_sni_event_file_is_written_by_its_logger_and_read_by_one_group).
+func TestTheSNIEventFileIsWrittenByItsLoggerAndReadByOneGroup(t *testing.T) {
+	s := service(t, "fr-xdp-sni-logger.service")
+	for key, want := range map[string]string{"User": "", "Group": "fr_os-feeds", "LogsDirectory": "fr_os-sni",
+		"LogsDirectoryMode": "0750", "UMask": "0027"} {
+		if got := last(s, key); got != want {
+			t.Errorf("%s=%q, want %q", key, got, want)
+		}
+	}
+	if got := last(service(t, "fr-webui.service"), "SupplementaryGroups"); got != "fr_os-feeds" {
+		t.Errorf("fr-webui.service: SupplementaryGroups=%q", got)
 	}
 }
 

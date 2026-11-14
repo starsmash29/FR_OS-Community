@@ -1,0 +1,47 @@
+[Unit]
+Description=FR_OS XDP SNI filter event logger
+Documentation=https://github.com/starsmash29/FR_OS-Community
+
+[Service]
+Type=simple
+# The event file the webUI and the sensor daemons read instead of this
+# unit's journal (ROADMAP SEC-4): /var/log/fr_os-sni, root:fr_os-feeds
+# 0750, the file in it 0640. Opened while the process is still root, so
+# only this process can write it, not fr_os-sensor, which it becomes and
+# the readers run as; Group= is what gives both the readers' group.
+Group=fr_os-feeds
+LogsDirectory=fr_os-sni
+LogsDirectoryMode=0750
+UMask=0027
+ExecStart=/usr/libexec/fr_os/fr-xdp-sni-logger
+Restart=on-failure
+RestartSec=5
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root only long enough to open a pinned BPF map: nothing but CAP_BPF and
+# what becoming fr_os-sensor takes (fros_xdp::privdrop). /sys stays
+# writable (no ProtectKernelTunables): the pinned maps live on bpffs
+# under it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service bpf
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_BPF CAP_SETUID CAP_SETGID
+
+[Install]
+WantedBy=multi-user.target
