@@ -188,6 +188,8 @@ type ApplyFile struct {
 	Hex    string  `json:"hex,omitempty"`
 	SHA256 string  `json:"sha256,omitempty"`
 	Len    int     `json:"len,omitempty"`
+	// Size is a setup file of that many zero bytes (written sparse).
+	Size int64 `json:"size,omitempty"`
 }
 
 // ApplyAnswer is what a program says: the first entry whose Argv is a
@@ -243,6 +245,22 @@ type ApplyCase struct {
 	Decided    string                `json:"decided,omitempty"`
 	// Fetch answers the downloads (urllib.request.urlopen), by URL.
 	Fetch []ApplyFetch `json:"fetch,omitempty"`
+	// Accounts are the users and groups firewall-cli ensure-accounts
+	// finds (nil: none at all); useradd, groupadd, usermod and gpasswd
+	// change them, and a chown is recorded as a call.
+	Accounts *ApplyAccounts `json:"accounts,omitempty"`
+}
+
+// ApplyAccounts are users by uid and groups by gid and members.
+type ApplyAccounts struct {
+	Users  map[string]int         `json:"users"`
+	Groups map[string]*ApplyGroup `json:"groups"`
+}
+
+// ApplyGroup is one group.
+type ApplyGroup struct {
+	GID     int      `json:"gid"`
+	Members []string `json:"members"`
 }
 
 // ApplyFetch is what one URL answers: a Body (Hex when it isn't

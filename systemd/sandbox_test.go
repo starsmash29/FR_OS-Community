@@ -37,10 +37,17 @@ var everywhere = map[string][]string{
 // root is the services that run as root, and why. Every other service
 // runs as its own unprivileged account.
 var root = map[string]string{
-	"fr-apply-helper.service":   "the privilege boundary: applies the network config",
-	"fr-apply-revert.service":   "a revert is an apply: the apply-helper's own sandbox",
-	"fr-tls-fp.service":         "opens a pinned BPF map, then becomes fr_os-sensor (fros_xdp::privdrop)",
-	"fr-xdp-sni-logger.service": "opens a pinned BPF map and its event file, then becomes fr_os-sensor",
+	"fr-apply-helper.service":    "the privilege boundary: applies the network config",
+	"fr-apply-revert.service":    "a revert is an apply: the apply-helper's own sandbox",
+	"fr-firewall.service":        "the boot's apply: the apply-helper's own sandbox",
+	"fr-schedule-check.service":  "reads nft's counters, and a refresh is an apply: the apply-helper's sandbox",
+	"fr-accounts.service":        "useradd, groupadd, usermod and gpasswd write the account files; no network",
+	"fr-dns-log-trim.service":    "empties dnsmasq's query log with CAP_DAC_OVERRIDE alone; no network",
+	"fr-adblock-refresh.service": "writes the lists under /etc/fr_os, with no capability at all",
+	"fr-adblock-dns.service":     "dnsmasq binds port 53, then becomes its own user",
+	"fr-dhcp6.service":           "dhcpcd sets addresses and routes, then privilege-separates itself",
+	"fr-tls-fp.service":          "opens a pinned BPF map, then becomes fr_os-sensor (fros_xdp::privdrop)",
+	"fr-xdp-sni-logger.service":  "opens a pinned BPF map and its event file, then becomes fr_os-sensor",
 }
 
 // never is no service's to have.
@@ -50,7 +57,7 @@ var never = []string{"CAP_SYS_MODULE", "CAP_SYS_PTRACE", "CAP_SYS_BOOT", "CAP_SY
 
 // exposure is the `systemd-analyze security` budget (0 best, 10 worst).
 var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-revert.service": 4.5,
-	"fr-webui.service": 2.5}
+	"fr-firewall.service": 4.5, "fr-schedule-check.service": 4.5, "fr-dhcp6.service": 3.0, "fr-webui.service": 2.5}
 
 // service is a unit's [Service]: each key and every value it is given.
 func service(t *testing.T, name string) map[string][]string {
@@ -253,6 +260,88 @@ func TestTheSNIEventFileIsWrittenByItsLoggerAndReadByOneGroup(t *testing.T) {
 	}
 	if got := last(service(t, "fr-webui.service"), "SupplementaryGroups"); got != "fr_os-feeds" {
 		t.Errorf("fr-webui.service: SupplementaryGroups=%q", got)
+	}
+}
+
+// firewall-cli's units run it from where the image installs it, with
+// 1.x's arguments, and its timers start them as 1.x's do; the scheduled
+// ad-block refresh holds no capability and fetches only while
+// ad-blocking is on (--scheduled), the log trim and ensure-accounts have
+// no network (as 1.x's units).
+func TestFirewallCLIUnits(t *testing.T) {
+	const cli = "/usr/libexec/fr_os/firewall-cli"
+	for name, want := range map[string]string{
+		"fr-firewall.service":        cli + " apply --fail-closed /etc/fr_os/config.yaml",
+		"fr-accounts.service":        cli + " ensure-accounts",
+		"fr-schedule-check.service":  cli + " schedule-check /etc/fr_os/config.yaml",
+		"fr-dns-log-trim.service":    cli + " dns-log-trim",
+		"fr-adblock-refresh.service": cli + " adblock-refresh --scheduled /etc/fr_os/config.yaml",
+	} {
+		s := service(t, name)
+		if got := last(s, "ExecStart"); got != want {
+			t.Errorf("%s: ExecStart=%q, want %q", name, got, want)
+		}
+		if got := last(s, "Type"); got != "oneshot" {
+			t.Errorf("%s: Type=%q", name, got)
+		}
+	}
+	for name, want := range map[string]map[string]string{
+		"fr-adblock-refresh.service": {"CapabilityBoundingSet": "", "RestrictAddressFamilies": "AF_UNIX AF_INET AF_INET6"},
+		"fr-dns-log-trim.service": {"CapabilityBoundingSet": "CAP_DAC_OVERRIDE", "PrivateNetwork": "yes",
+			"RestrictAddressFamilies": "AF_UNIX", "ReadWritePaths": "-/var/log/fr_os-dns"},
+		"fr-accounts.service": {"PrivateNetwork": "yes", "RestrictAddressFamilies": "AF_UNIX AF_NETLINK"},
+		"fr-firewall.service": {"RemainAfterExit": "yes", "StandardInput": "null"},
+	} {
+		s := service(t, name)
+		for key, v := range want {
+			if got := last(s, key); got != v {
+				t.Errorf("%s: %s=%q, want %q", name, key, got, v)
+			}
+		}
+	}
+	if got := last(section(t, "fr-firewall.service", "[Install]"), "WantedBy"); got != "sysinit.target" {
+		t.Errorf("fr-firewall.service: WantedBy=%q", got)
+	}
+	for name, want := range map[string]map[string]string{
+		"fr-schedule-check.timer":  {"OnCalendar": "*-*-* *:02:00", "Persistent": "true"},
+		"fr-dns-log-trim.timer":    {"OnCalendar": "hourly", "Persistent": "true"},
+		"fr-adblock-refresh.timer": {"OnCalendar": "*-*-* 04:15:00", "Persistent": "true", "RandomizedDelaySec": "1800"},
+	} {
+		timer := section(t, name, "[Timer]")
+		for key, v := range want {
+			if got := last(timer, key); got != v {
+				t.Errorf("%s: %s=%q, want %q", name, key, got, v)
+			}
+		}
+		if got := last(section(t, name, "[Install]"), "WantedBy"); got != "timers.target" {
+			t.Errorf("%s: WantedBy=%q", name, got)
+		}
+	}
+}
+
+// The resolvers the apply configures run as 1.x's: the ad-block dnsmasq
+// writes its query log into a directory read through fr_os-feeds, the
+// RA instance runs as its own dynamic account with only the two
+// capabilities RAs take.
+func TestTheResolverUnits(t *testing.T) {
+	s := service(t, "fr-adblock-dns.service")
+	for key, want := range map[string]string{"Group": "fr_os-feeds", "LogsDirectory": "fr_os-dns",
+		"LogsDirectoryMode": "0750",
+		"ExecStart":         "/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/fr_os/dnsmasq_adblock.conf"} {
+		if got := last(s, key); got != want {
+			t.Errorf("fr-adblock-dns.service: %s=%q, want %q", key, got, want)
+		}
+	}
+	s = service(t, "fr-ra.service")
+	for key, want := range map[string]string{"DynamicUser": "yes", "User": "fr_os-ra",
+		"AmbientCapabilities": "CAP_NET_RAW CAP_NET_ADMIN", "CapabilityBoundingSet": "CAP_NET_RAW CAP_NET_ADMIN",
+		"ExecStart": "/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/fr_os/dnsmasq_ra.conf"} {
+		if got := last(s, key); got != want {
+			t.Errorf("fr-ra.service: %s=%q, want %q", key, got, want)
+		}
+	}
+	if got := last(service(t, "fr-dhcp6.service"), "ExecStart"); got != "/usr/sbin/dhcpcd --nobackground --config /etc/fr_os/dhcpcd6.conf" {
+		t.Errorf("fr-dhcp6.service: ExecStart=%q", got)
 	}
 }
 

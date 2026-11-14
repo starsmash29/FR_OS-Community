@@ -738,3 +738,54 @@ binary against a fake helper and a fake responder.
 - **The inventory is written as 1.x writes it** (`<path>.tmp`, then
   moved over the file, its directory made first); a write that fails
   is an `error:` line after the messages and exit 1, where 1.x dies.
+
+## 2026-11-14: firewall-cli, the router's own commands (phase 4f-1)
+
+`firewall-cli` is the part of 1.x's `frfw.cli` the router's units run:
+the boot's apply in fail-closed mode (`fr-firewall.service`), an apply
+from the console (held with `--confirm-within`, or not), `validate`,
+`render`, the hourly `schedule-check` with the rule hit counters, the
+`dns-log-trim`, the `adblock-refresh` and `ensure-accounts`
+(`fr-accounts.service`). `reference/test_fros_apply_cases.py` records
+it as steps `{"cli": argv}` of the apply sessions, against the same
+fake system (`cli/...`): the exit status, what it printed on stdout and
+stderr, the programs it ran and the files it left. For ensure-accounts
+the case gives the accounts there are (`accounts`), which useradd,
+groupadd, usermod and gpasswd change in both fakes, with each chown
+recorded as a call; a setup file may be `{"size": n}` (n zero bytes,
+for the query log past its 16 MiB) or carry `@FP@`, the fingerprint of
+the setup's config as each implementation computes its own.
+`apply/reference_apply_test.go` replays every step through
+`helper.Server.CLI`.
+
+- **A command line argparse refuses (exit 2) is held to its exit status
+  only.** Cases: `cli/usage`. Why: argparse's usage text lists every
+  command 1.x has; 2.x prints its own, of the commands it has.
+- **Where 1.x dies with a traceback, 2.x prints `error: <text>` (or
+  `KeyError: <name>` for an account that isn't there) and exits 1, as
+  1.x does.** Cases: steps recorded with `raised`
+  (`cli/accounts/no root account`, `cli/accounts/no feeds group yet`).
+- **The config's fingerprint now covers every value.** `Ordered`
+  mappings (interfaces, zones, DHCP zones, ...) were written to the JSON
+  the fingerprint hashes by their keys alone, so two configs that
+  differ only inside them had one fingerprint: the schedule check would
+  have re-applied an edit saved but never applied, and the boot would
+  not have tried the last applied config when it differs from
+  config.yaml only there (`cli/boot, fails, the last applied works`).
+  They are written with their values now. The fingerprint is still
+  2.x's own (above, "The schedule record's fingerprint"), so no recorded
+  case changes.
+- **The rule hit counters' error for nft output that isn't JSON is
+  2.x's parser's text** after the same `rule hit counters not
+  recorded: ` (no case records one).
+- **Not ported in 4f-1:** `initial-password` moves to phase 4f-2 with
+  the first boot, whose admin account store it reads; the commands no
+  unit runs (`apply-status`, `apply-confirm`, `apply-revert`,
+  `rollback`, `management-addresses`, the status views, the update and
+  kernel commands) come with the phases that need them.
+- **The recording appends the `cli/` cases to the committed ones.** A
+  whole regeneration in this container gives a different sample of
+  accepted configs (1.x's suite fails some environment-bound tests
+  here) and another order of the XDP blocklist's keys (Python's hash
+  seed); the recorder's other cases came out the same, so they were
+  kept as they are.

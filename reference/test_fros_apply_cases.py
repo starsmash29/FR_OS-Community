@@ -102,8 +102,14 @@ class _Fake:
         self.passed: dict[int, int] = {}
         self.leaks: set[str] = set()
         self.fetch: list = []
+        #: The case's accounts, when it gives them (the CLI's
+        #: ensure-accounts): users by uid, groups with gid and members,
+        #: changed by useradd, groupadd, usermod and gpasswd; None is no
+        #: account at all.
+        self.accounts: dict | None = None
         self.active = False
         allowed = {str(root), os.path.realpath(root), "/dev/null", "/dev/urandom", "/usr/share/zoneinfo",
+                   "/usr/share/locale", "/usr/local/share/locale",  # argparse's gettext
                    "/etc/localtime", "/proc/self", tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())}
         allowed |= {p for p in sys.path if p and os.path.isabs(p)}
         self.allowed = tuple(sorted(allowed))
@@ -149,9 +155,39 @@ class _Fake:
         if not (text or universal_newlines or encoding):
             out, err = out.encode(), err.encode()
         proc = subprocess.CompletedProcess(args, answer.get("rc", 0), out, err)
+        if not proc.returncode and self.accounts is not None:
+            _account_change(self.accounts, argv)
         if check and proc.returncode:
             raise subprocess.CalledProcessError(proc.returncode, args, out, err)
         return proc
+
+
+#: The first id an account the case creates gets: none a real one has.
+FIRST_ID = 64900
+
+
+def _account_change(accounts: dict, argv: list[str]) -> None:
+    """What useradd, groupadd, usermod and gpasswd change, as the Go
+    replay's fake does."""
+    users, groups = accounts["users"], accounts["groups"]
+
+    def next_id() -> int:
+        return FIRST_ID + len(accounts.setdefault("made", []))
+
+    if argv[:1] == ["useradd"] and argv[-2] == "--":
+        uid = next_id()
+        accounts["made"].append(argv[-1])
+        users[argv[-1]] = uid
+        if "--user-group" in argv:
+            groups[argv[-1]] = {"gid": uid, "members": []}
+    elif argv[:1] == ["groupadd"] and argv[-2] == "--":
+        gid = next_id()
+        accounts["made"].append(argv[-1])
+        groups[argv[-1]] = {"gid": gid, "members": []}
+    elif argv[:3] == ["usermod", "--append", "--groups"] and argv[-2] == "--" and argv[3] in groups:
+        groups[argv[3]]["members"].append(argv[-1])
+    elif argv[:2] == ["gpasswd", "--delete"] and argv[3] in groups:
+        groups[argv[3]]["members"] = [m for m in groups[argv[3]]["members"] if m != argv[2]]
 
 
 def _digest(text):
@@ -249,10 +285,13 @@ def system(monkeypatch, tmp_path):
 
     # Every module an apply uses is imported before the paths are moved:
     # one first imported during a session would keep the router's paths.
-    from frfw import provision, xdp  # noqa: F401
+    from frfw import accounts, cli, provision, rule_hits, schedule_refresh, xdp  # noqa: F401
+    from frfw.adblock import dns_service  # noqa: F401
     from frfw.helper import server  # noqa: F401
+    from frfw.webui import audit  # noqa: F401
 
     _reroot(monkeypatch, root)
+    monkeypatch.setattr(accounts, "NOLOGIN", "/usr/sbin/nologin")  # a shell's name, not a file it opens
     from frfw import management
 
     monkeypatch.setattr(management, "ssh_login_users", management.ssh_login_users)  # each session sets it
@@ -276,11 +315,34 @@ def system(monkeypatch, tmp_path):
 
     monkeypatch.setattr(xdp, "_ethtool_value", ethtool)
     monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(os, "chown", lambda *a, **k: None)
+    def chown(path, uid, gid, *a, **k):
+        """Nothing changes; with the case's accounts, recorded as a call
+        ["chown", path, uid, gid]."""
+        fake = state.get("fake")
+        if fake is not None and fake.accounts is not None:
+            fake.calls.append({"argv": ["chown", os.fspath(path), str(uid), str(gid)], "input": None,
+                               "timeout": None})
+
+    def getgrnam(name):
+        fake = state.get("fake")
+        groups = (fake.accounts or {}).get("groups", {}) if fake is not None else {}
+        if name not in groups:
+            raise KeyError(name)
+        g = groups[name]
+        return types.SimpleNamespace(gr_name=name, gr_gid=g["gid"], gr_mem=list(g["members"]))
+
+    def getpwnam(name):
+        fake = state.get("fake")
+        users = (fake.accounts or {}).get("users", {}) if fake is not None else {}
+        if name not in users:
+            raise KeyError(name)
+        return types.SimpleNamespace(pw_name=name, pw_uid=users[name], pw_gid=users[name])
+
+    monkeypatch.setattr(os, "chown", chown)
     monkeypatch.setattr(os, "fchown", lambda *a, **k: None)
     monkeypatch.setattr(shutil, "which", lambda name, *a, **k: "/usr/bin/" + name)
-    monkeypatch.setattr(grp, "getgrnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
-    monkeypatch.setattr(pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
+    monkeypatch.setattr(grp, "getgrnam", getgrnam)
+    monkeypatch.setattr(pwd, "getpwnam", getpwnam)
     monkeypatch.setattr("time.time", lambda: NOW)
     monkeypatch.setattr(frfw_apply, "datetime", _FixedDatetime)
     monkeypatch.setattr(apply_confirm.secrets, "token_hex", lambda n=32: state["fake"].bytes(n).hex())
@@ -399,7 +461,7 @@ def _wait(server, later: float) -> list[str]:
 
 def _session(system, name: str, setup: dict, requests: list, table: list | None = None,
              random: bytes = b"", decided: str | None = None, openssl=OPENSSL,
-             login_users: tuple[str, ...] = (), fetch: list | None = None) -> None:
+             login_users: tuple[str, ...] = (), fetch: list | None = None, accounts: dict | None = None) -> None:
     from frfw.helper import server as helper_server
     from frfw.helper.peer import PeerPolicy
 
@@ -409,14 +471,26 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
     fake = make(table or [], random, openssl)
     fake.fetch = fetch or []
     management.ssh_login_users = lambda: list(login_users)  # the fixture puts it back
+    if accounts is not None:
+        fake.accounts = copy.deepcopy(accounts)
+    fp = _fingerprint(setup)
     for rel, content in setup.items():
         path = root / rel
         if rel.endswith("/"):
             path.mkdir(parents=True, exist_ok=True)
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+        if isinstance(content, dict):  # {"size": n}: n zero bytes, sparse
+            with open(path, "wb") as f:
+                f.truncate(content["size"])
+            continue
+        path.write_text(content.replace(FINGERPRINT, fp))
     before = _snapshot(root, max_text=1 << 20)  # in full: the replay writes it
+    for rel, content in setup.items():
+        if isinstance(content, dict):
+            before[rel] = {"mode": before[rel]["mode"], "size": content["size"]}
+        elif isinstance(content, str) and FINGERPRINT in content:
+            before[rel]["text"] = before[rel]["text"].replace(fp, FINGERPRINT)
     server = types.SimpleNamespace(
         config_path=root / "etc/fr_os/config.yaml", backup_dir=root / "etc/fr_os/backups",
         kea_config_path=root / "etc/kea/kea-dhcp4.conf", sensor_config_path=root / "etc/fr_os/sensor-config.yaml",
@@ -434,6 +508,8 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
         try:
             if "wait" in request:  # fr-apply-revert.service, request["wait"] s later
                 reply = {"messages": _wait(server, request["wait"])}
+            elif "cli" in request:  # firewall-cli, its argv with the root as "@ROOT@"
+                reply = _cli([a.replace("@ROOT@", str(root)) for a in request["cli"]])
             else:
                 reply = helper_server._handle_request(copy.deepcopy(request), server)
             step = {"request": request, "reply": json.loads(json.dumps(reply))}
@@ -448,9 +524,43 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
             "steps": steps, "files": _snapshot(root), "leaks": sorted(fake.leaks)}
     if fetch is not None:
         case["fetch"] = fetch
+    if accounts is not None:
+        case["accounts"] = accounts
     if decided:
         case["decided"] = decided
     _record(_rooted(case, str(root)))
+
+
+#: In a setup file, the fingerprint of the setup's config.yaml as each
+#: implementation computes its own (decisions.md, "The schedule record's
+#: fingerprint").
+FINGERPRINT = "@FP@"
+
+
+def _fingerprint(setup: dict) -> str:
+    from frfw import schedule_refresh
+    from frfw.config.loader import parse_config
+
+    text = setup.get("etc/fr_os/config.yaml")
+    if not any(isinstance(v, str) and FINGERPRINT in v for v in setup.values()):
+        return FINGERPRINT
+    return schedule_refresh.config_fingerprint(parse_config(yaml.safe_load(text)))
+
+
+def _cli(argv: list[str]) -> dict:
+    """firewall-cli with argv: its exit status and what it printed."""
+    import contextlib
+    import io
+
+    from frfw import cli
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = cli.main(argv)
+        except SystemExit as exc:  # argparse
+            code = exc.code if isinstance(exc.code, int) else 1
+    return {"code": code, "stdout": out.getvalue(), "stderr": err.getvalue()}
 
 
 # --- what the sessions apply ------------------------------------------------------
@@ -1604,3 +1714,202 @@ ADBLOCK_SESSIONS = {
 def test_adblock_session(system, name):
     setup, fetch = ADBLOCK_SESSIONS[name]
     _session(system, f"adblock/{name}", setup, [{"cmd": "refresh_adblock"}], [], RANDOM, fetch=fetch)
+
+
+# --- firewall-cli (phase 4f-1) ----------------------------------------------------
+#
+# The commands the units run: the boot's apply (fr-firewall.service,
+# `apply --fail-closed`), an apply from the console (held with
+# --confirm-within, or not), validate and render, the hourly schedule
+# check with the rule hit counters, the DNS query log trim, the ad-block
+# refresh, and ensure-accounts with the case's accounts. A step
+# {"cli": argv} records the exit status and what was printed.
+
+CONFIG = "@ROOT@/etc/fr_os/config.yaml"
+
+
+def _c(*argv) -> dict:
+    return {"cli": list(argv)}
+
+
+#: RICH, its LAN address moved: an apply of it fails where `ip` can't
+#: set the new address.
+RICH_MOVED = RICH.replace("address: 10.0.0.1/24", "address: 10.0.0.2/24")
+NEW_ADDRESS_FAILS = {"argv": ["ip", "addr", "replace", "10.0.0.2/24"], "rc": 2,
+                     "stderr": "RTNETLINK answers: Permission denied\n"}
+KEA_FAILS = {"argv": ["kea-dhcp4", "-t"], "rc": 1, "stderr": "DHCP4_CONFIG_LOAD_FAIL\n"}
+NO_TABLE = {"argv": ["nft", "list", "table"], "rc": 1, "stderr": "Error: No such file or directory\n"}
+
+SCHED = PLAIN.replace(
+    "rules: [{name: lan-to-wan, action: accept, from_zone: lan, to_zone: wan}]\n",
+    "timezone: Europe/Berlin\n"
+    "rules:\n"
+    "  - {name: lan-to-wan, action: accept, from_zone: lan, to_zone: wan}\n"
+    "  - {name: kids-night, action: drop, from_zone: lan, to_zone: wan,\n"
+    "     schedule: {days: [weekdays], start: \"21:30\", end: \"06:30\"}}\n")
+
+
+def _schedule_state(fingerprint: str, offset: int = 120) -> str:
+    return json.dumps({"clock": {"utc_offset_minutes": offset, "kernel_minuteswest": 0},
+                       "timezone": "Europe/Berlin", "config_fingerprint": fingerprint})
+
+
+def _held(previous: str, by: str = "admin") -> str:
+    """An apply held for confirmation, its deadline passed."""
+    return json.dumps({"id": "00" * 8, "deadline": NOW - 5, "seconds": 120, "by": by,
+                       "addresses": ["10.0.0.1"], "previous": previous})
+
+
+COUNTERS = {"argv": ["nft", "-j", "list", "table", "inet", "fr_os"], "stdout": json.dumps({"nftables": [
+    {"metainfo": {"version": "1.0.6"}},
+    {"rule": {"family": "inet", "table": "fr_os", "chain": "forward", "handle": 5, "comment": "rule:lan-to-wan",
+              "expr": [{"counter": {"packets": 12, "bytes": 900}}, {"accept": None}]}},
+    {"rule": {"comment": "rule:kids-night", "expr": [{"counter": {"packets": 3, "bytes": 180}}, {"drop": None}]}},
+    {"rule": {"comment": "rule:kids-night", "expr": [{"counter": {"packets": 2, "bytes": 120}}, {"drop": None}]}},
+    {"rule": {"comment": "masquerade", "expr": [{"counter": {"packets": 7}}]}},
+    {"chain": {"name": "forward"}}]})}
+HITS = {"etc/fr_os/rule_hits.json": json.dumps({"rules": {
+    "lan-to-wan": {"since": 1790000000.0, "last_hit": None, "packets": 20},
+    "gone": {"since": 1790000000.0, "last_hit": 1791000000.5, "packets": 4}}})}
+
+#: 16 MiB, the query log's limit (frfw.adblock.dns_service).
+QUERY_LOG = "var/log/fr_os-dns/queries.log"
+QUERY_LOG_MAX = 16 * 1024 * 1024
+
+CLI_SESSIONS = {
+    "validate": (_tree(PLAIN, None, **{"etc/fr_os/bad.yaml": "version: 2\n", "etc/fr_os/broken.yaml": "a: [\n",
+                                       "etc/fr_os/empty.yaml": ""}), [
+        _c("validate", CONFIG), _c("validate"), _c("validate", "@ROOT@/etc/fr_os/bad.yaml"),
+        _c("validate", "@ROOT@/etc/fr_os/broken.yaml"), _c("validate", "@ROOT@/etc/fr_os/empty.yaml"),
+        _c("validate", "@ROOT@/etc/fr_os/missing.yaml"), _c("validate", "@ROOT@/etc/fr_os")], []),
+    "render": (_tree(RICH), [_c("render", CONFIG), _c("render", "@ROOT@/etc/fr_os/missing.yaml")], []),
+    "render, scheduled": (_tree(SCHED), [_c("render")], []),
+    "usage": ({}, [_c(), _c("bogus"), _c("apply", "--confirm-within", "x"), _c("validate", "a", "b"),
+                   _c("dns-log-trim", "x")], []),
+    "apply": (_tree(PLAIN), [_c("apply", CONFIG), _c("apply", "--dry-run", CONFIG), _c("apply")], []),
+    "apply, dry run": (_tree(RICH), [_c("apply", "--dry-run")], []),
+    "apply, no config": ({}, [_c("apply"), _c("apply", "--dry-run")], []),
+    "apply, bad config": (_tree(PLAIN, None, **{"etc/fr_os/config.yaml": "version: 2\n"}), [_c("apply")], []),
+    "apply, fails": (_tree(RICH2, RICH), [_c("apply")], [KEA_FAILS, RUNNING]),
+    "apply, confirm-within out of range": (_tree(RICH2, RICH), [
+        _c("apply", "--confirm-within", "59"), _c("apply", "--confirm-within", "3601"),
+        _c("apply", "--confirm-within", "-1", "--dry-run")], [RUNNING]),
+    "apply, held": (_tree(RICH2, RICH), [
+        _c("apply", "--confirm-within", "120"), _c("apply"), _c("apply", "--confirm-within", "60"),
+        {"cmd": "apply_status"}, _c("apply", "--dry-run")], [RUNNING]),
+    "apply, held, revert unit fails": (_tree(RICH2, RICH), [_c("apply", "--confirm-within", "120")], [
+        {"argv": ["systemctl", "restart", "--", "fr-apply-revert.service"], "rc": 5,
+         "stderr": "Unit fr-apply-revert.service not found.\n"}, RUNNING]),
+    "apply, nothing to go back to": (_tree(RICH), [_c("apply", "--confirm-within", "120")], []),
+    "apply, the same config": (_tree(RICH, RICH), [_c("apply", "--confirm-within", "120")], [RUNNING]),
+    "apply, moves management": (_tree(RICH2.replace("10.0.0.", "10.0.5."), RICH),
+                                [_c("apply"), _c("apply", "--dry-run")], [RUNNING]),
+    "boot": (_tree(PLAIN), [_c("apply", "--fail-closed", CONFIG)], []),
+    "boot, dry run": (_tree(PLAIN), [_c("apply", "--fail-closed", "--dry-run")], []),
+    "boot, no config": ({"proc/sys/net/ipv4/ip_forward": "0\n"}, [_c("apply", "--fail-closed", CONFIG)], []),
+    "boot, no config, nft fails": ({}, [_c("apply", "--fail-closed")], [
+        {"argv": ["nft", "-f"], "rc": 1, "stderr": "Error: Could not process rule\n"}]),
+    "boot, bad config, no ruleset": (_tree(PLAIN, None, **{"etc/fr_os/config.yaml": "version: 2\n"}),
+                                     [_c("apply", "--fail-closed")], [NO_TABLE]),
+    "boot, bad config, ruleset loaded": (_tree(PLAIN, None, **{"etc/fr_os/config.yaml": "version: 2\n"}),
+                                         [_c("apply", "--fail-closed")], [RUNNING]),
+    "boot, fails, the last applied works": (_tree(RICH_MOVED, RICH), [_c("apply", "--fail-closed")],
+                                            [NEW_ADDRESS_FAILS, RUNNING]),
+    "boot, fails, the last applied the same": (_tree(RICH, RICH), [_c("apply", "--fail-closed")],
+                                               [KEA_FAILS, RUNNING]),
+    "boot, fails, nothing applied before": (_tree(RICH), [_c("apply", "--fail-closed")], [KEA_FAILS, RUNNING]),
+    "boot, fails, the last applied fails too": (_tree(RICH_MOVED, RICH), [_c("apply", "--fail-closed")],
+                                                [KEA_FAILS, RUNNING]),
+    "boot, fails, no ruleset": (_tree(RICH_MOVED, RICH), [_c("apply", "--fail-closed")],
+                                [KEA_FAILS, {"argv": ["nft", "-f"], "rc": 1, "stderr": "Error: bad\n"}, NO_TABLE]),
+    "boot, held": (_tree(RICH2, RICH), [_c("apply", "--confirm-within", "120"), _c("apply", "--fail-closed"),
+                                        {"cmd": "apply_status"}], [RUNNING]),
+    "boot, held, the earlier config fails": (_tree(RICH2, RICH, **{"etc/fr_os/apply-pending.json": _held(RICH)}),
+                                             [_c("apply", "--fail-closed")], [KEA_FAILS, RUNNING]),
+    "boot, held, the earlier config broken": (_tree(RICH2, RICH, **{
+        "etc/fr_os/apply-pending.json": _held("version: 1\nbogus: 1\n")}), [_c("apply", "--fail-closed")], [RUNNING]),
+    "boot, held, the earlier config fails, no ruleset": (_tree(RICH2, RICH, **{
+        "etc/fr_os/apply-pending.json": _held(RICH)}), [_c("apply", "--fail-closed")],
+        [KEA_FAILS, {"argv": ["nft", "-f"], "rc": 1, "stderr": "Error: bad\n"}, NO_TABLE]),
+    "schedule check, no schedules": (_tree(PLAIN), [_c("schedule-check", CONFIG)], []),
+    "schedule check, not recorded": (_tree(SCHED, None, **HITS), [_c("schedule-check")], [COUNTERS]),
+    "schedule check, up to date": (_tree(SCHED), [_c("apply"), _c("schedule-check")], [COUNTERS]),
+    "schedule check, refresh": (_tree(SCHED, SCHED, **{"etc/fr_os/schedule_state.json": _schedule_state(
+        FINGERPRINT)}), [_c("schedule-check")], [COUNTERS]),
+    "schedule check, config changed": (_tree(SCHED, SCHED, **{"etc/fr_os/schedule_state.json": _schedule_state(
+        "0" * 64)}), [_c("schedule-check")], [COUNTERS]),
+    "schedule check, odd record": (_tree(SCHED, None, **{"etc/fr_os/schedule_state.json": "[1]"}),
+                                   [_c("schedule-check")], []),
+    "schedule check, no clock": (_tree(SCHED, None, **{"etc/fr_os/schedule_state.json": json.dumps(
+        {"config_fingerprint": FINGERPRINT})}), [_c("schedule-check")], []),
+    "schedule check, no nft": (_tree(SCHED), [_c("schedule-check")], [{"argv": ["nft", "-j"], "error": "missing"}]),
+    "schedule check, no config": ({}, [_c("schedule-check")], []),
+    "dns log trim, small": ({QUERY_LOG: "query[A] example.com\n"}, [_c("dns-log-trim")], []),
+    "dns log trim, at the limit": ({QUERY_LOG: {"size": QUERY_LOG_MAX}}, [_c("dns-log-trim")], []),
+    "dns log trim, over": ({QUERY_LOG: {"size": QUERY_LOG_MAX + 1}}, [_c("dns-log-trim"), _c("dns-log-trim")], []),
+    "dns log trim, missing": ({}, [_c("dns-log-trim")], []),
+}
+
+CLI_FETCH_SESSIONS = {
+    "adblock refresh, scheduled, off": (_tree(PLAIN), [_c("adblock-refresh", "--scheduled", CONFIG)]),
+    "adblock refresh, scheduled": (_tree(ADBLOCK, **STALE), [_c("adblock-refresh", "--scheduled")]),
+    "adblock refresh, by hand, off": (_tree(PLAIN), [_c("adblock-refresh")]),
+    "adblock refresh, everything down": (_tree(ADBLOCK, **STALE), [_c("adblock-refresh")]),
+    "adblock refresh, no config": ({}, [_c("adblock-refresh")]),
+    "adblock refresh, bad config": ({"etc/fr_os/config.yaml": "version: 2\n"}, [_c("adblock-refresh")]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CLI_SESSIONS))
+def test_cli_session(system, name):
+    setup, requests, table = CLI_SESSIONS[name]
+    text = setup.get("etc/fr_os/config.yaml")
+    links = []
+    for t in {text, setup.get("etc/fr_os/applied-config.yaml")} - {None}:
+        try:
+            links += _links(t)
+        except Exception:  # not a config: nothing to list
+            pass
+    _session(system, f"cli/{name}", setup, requests, table + links, RANDOM)
+
+
+@pytest.mark.parametrize("name", sorted(CLI_FETCH_SESSIONS))
+def test_cli_fetch_session(system, name):
+    setup, requests = CLI_FETCH_SESSIONS[name]
+    fetch = ADBLOCK_FETCH
+    if name.endswith("everything down"):
+        fetch = [_fetch(a["url"], error="timed out") for a in ADBLOCK_FETCH]
+    _session(system, f"cli/{name}", setup, requests, [], RANDOM, fetch=fetch)
+
+
+#: The accounts ensure-accounts finds: root only, or all of FR_OS's.
+ROOT_ONLY = {"users": {"root": 0}, "groups": {"root": {"gid": 0, "members": []}}}
+ALL_ACCOUNTS = {"users": {"root": 0, "fr_os-webui": 64800, "fr_os-sensor": 64801},
+                "groups": {"root": {"gid": 0, "members": []}, "fr_os-webui": {"gid": 64800, "members": []},
+                           "fr_os-sensor": {"gid": 64801, "members": []},
+                           "fr_os-feeds": {"gid": 64802, "members": ["fr_os-webui", "fr_os-sensor"]},
+                           "fr_os-ssh": {"gid": 64803, "members": []}}}
+OLD_ACCOUNTS = copy.deepcopy(ALL_ACCOUNTS)
+OLD_ACCOUNTS["groups"]["fr_os-webui"]["members"] = ["fr_os-sensor"]
+OLD_ACCOUNTS["groups"]["fr_os-feeds"]["members"] = ["fr_os-webui"]
+FEEDS = {"var/log/fr_os-sni/events.jsonl": "{}\n", QUERY_LOG: "", "run/fr_os/apply.sock": ""}
+STATE_DIRS = {"etc/fr_os/webui/": "", "etc/fr_os/sensors/": "", "var/log/fr_os/": ""}
+
+ACCOUNT_SESSIONS = {
+    "fresh": ({}, ROOT_ONLY, []),
+    "in place": (STATE_DIRS, ALL_ACCOUNTS, []),
+    "an earlier version's": ({**STATE_DIRS, **FEEDS, "var/log/fr_os/audit.log": "x\n"}, OLD_ACCOUNTS, []),
+    "no feeds group yet": (FEEDS, {**ROOT_ONLY, "users": {"root": 0, "fr_os-webui": 64800}}, []),
+    "useradd fails": ({}, ROOT_ONLY, [{"argv": ["useradd"], "rc": 1,
+                                        "stderr": "useradd: cannot lock /etc/passwd; try again later.\n"}]),
+    "useradd fails quietly": ({}, ROOT_ONLY, [{"argv": ["useradd"], "rc": 9, "stdout": "  taken \n"}]),
+    "no groupadd": ({}, ROOT_ONLY, [{"argv": ["groupadd"], "error": "missing"}]),
+    "gpasswd fails": ({}, OLD_ACCOUNTS, [{"argv": ["gpasswd"], "rc": 3, "stderr": "gpasswd: bad\n"}]),
+    "no root account": ({}, {"users": {}, "groups": {}}, []),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ACCOUNT_SESSIONS))
+def test_cli_accounts(system, name):
+    setup, accounts, table = ACCOUNT_SESSIONS[name]
+    _session(system, f"cli/accounts/{name}", setup, [_c("ensure-accounts")], table, RANDOM, accounts=accounts)

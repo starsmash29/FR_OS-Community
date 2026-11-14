@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly FR_OS scheduled-rule check
+Documentation=https://github.com/starsmash29/FR_OS-Community
+
+[Timer]
+OnCalendar=*-*-* *:02:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

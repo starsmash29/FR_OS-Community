@@ -187,6 +187,15 @@ func (s *Server) confirmHeld(id string) error {
 // for the admin to fix. Every revert is a security alert. The caller
 // holds the lock.
 func (s *Server) Revert(why string) ([]string, error) {
+	return s.revert(why, func(c *config.Config, text string) ([]string, error) {
+		return s.sys().ApplyAll(c, apply.Options{SourceText: &text})
+	})
+}
+
+// revert is Revert, the previous config applied by applyPrevious (the
+// boot's own, firewall-cli apply --fail-closed, falls back to applying
+// it as far as it goes).
+func (s *Server) revert(why string, applyPrevious func(c *config.Config, text string) ([]string, error)) ([]string, error) {
 	sys := s.sys()
 	p := sys.Paths
 	held, err := s.readHeld()
@@ -208,8 +217,7 @@ func (s *Server) Revert(why string) ([]string, error) {
 	}
 	var messages []string
 	failure := ""
-	text := held.previous
-	result, err := sys.ApplyAll(previous, apply.Options{SourceText: &text})
+	result, err := applyPrevious(previous, held.previous)
 	var ae *apply.Error
 	switch {
 	case errors.As(err, &ae):

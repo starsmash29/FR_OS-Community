@@ -49,6 +49,12 @@ type Paths struct {
 	XdpObject, XdpPins string
 	// The programs whose presence an apply checks by path.
 	DhcpcdBinary, RADnsmasqBinary string
+	// What firewall-cli's ensure-accounts makes and regroups: the webUI's
+	// and the sensors' state directories, the XDP SNI filter's event file
+	// and the helper's socket (frfw.paths).
+	WebUIState, SensorState, SNIEvents, ApplySocket string
+	// RuleHits is when each rule last matched (frfw.rule_hits).
+	RuleHits string
 }
 
 // DefaultPaths are the router's.
@@ -73,6 +79,9 @@ func DefaultPaths() Paths {
 		XdpStats:  "/sys/fs/bpf/fr_os_xdp/maps/stats",
 		XdpObject: "/usr/local/share/fr_os/bpf/xdp_sni_filter.o", XdpPins: "/sys/fs/bpf/fr_os_xdp",
 		DhcpcdBinary: "/usr/sbin/dhcpcd", RADnsmasqBinary: "/usr/sbin/dnsmasq",
+		WebUIState: "/etc/fr_os/webui", SensorState: "/etc/fr_os/sensors",
+		SNIEvents: "/var/log/fr_os-sni/events.jsonl", ApplySocket: "/run/fr_os/apply.sock",
+		RuleHits: "/etc/fr_os/rule_hits.json",
 	}
 }
 
@@ -148,6 +157,11 @@ type System struct {
 	// router has no ethtool). An error is the ioctl's errno.
 	GRO    func(device string) (bool, error)
 	SetGRO func(device string, on bool) error
+	// User is pwd.getpwnam(name).pw_uid, Group grp.getgrnam(name)'s gid
+	// and members; ok false when there is no such account
+	// (firewall-cli ensure-accounts).
+	User  func(name string) (uid int, ok bool)
+	Group func(name string) (gid int, members []string, ok bool)
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;
@@ -167,6 +181,8 @@ func DefaultSystem() *System {
 		Fetch:          HTTPFetch,
 		GRO:            ethtoolGRO,
 		SetGRO:         ethtoolSetGRO,
+		User:           lookupUser,
+		Group:          lookupGroup,
 	}
 }
 

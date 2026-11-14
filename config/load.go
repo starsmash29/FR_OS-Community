@@ -77,11 +77,19 @@ const (
 	// refused here instead.
 	maxSNILen          = 32
 	maxQuarantine      = 7 * 24 * 3600
-	confirmApplyMin    = 60
-	confirmApplyMax    = 3600
+	confirmApplyMin    = ConfirmApplyMin
+	confirmApplyMax    = ConfirmApplyMax
 	confirmApplyDef    = 300
 	pinholeMaxPorts    = 1000
 	localDNSMaxEntries = 1024
+)
+
+// ConfirmApplyMin and ConfirmApplyMax bound how long an apply is held
+// for confirmation (management.confirm_apply_seconds, firewall-cli apply
+// --confirm-within).
+const (
+	ConfirmApplyMin = 60
+	ConfirmApplyMax = 3600
 )
 
 // hostLabel is one label of an RFC 1123 host name: 1-63 letters, digits

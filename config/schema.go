@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"strconv"
 )
@@ -63,6 +65,16 @@ func (o *Ordered[T]) set(key string, v T) {
 		o.Keys = append(o.Keys, key)
 	}
 	o.byKey[key] = v
+}
+
+// MarshalJSONTo writes the keys and the values in order: the config's
+// fingerprint (apply.ConfigFingerprint) is this JSON, and a value left
+// out would make two different configs one.
+func (o Ordered[T]) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return json.MarshalEncode(enc, struct {
+		Keys   []string
+		Values []T
+	}{o.Keys, o.Values()})
 }
 
 // Get is the value at key.
