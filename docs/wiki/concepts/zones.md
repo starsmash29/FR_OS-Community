@@ -184,7 +184,9 @@ rules:
 | `expires` | A date and time after which the rule stops matching. The expiry is checked in the kernel, so it is exact without a new apply. |
 
 The full reference for every field and its validation rule is in the
-configuration reference.
+[configuration reference](../reference/configuration.md#rules), and
+[Firewall rules and schedules](../features/firewall-rules.md) shows them
+at work.
 
 ### Good habits
 

@@ -95,7 +95,7 @@ other section is optional, and a feature whose section is missing is off.
 | `pqc` | Hybrid post-quantum key exchange for the web console and SSH. |
 | `update` | Where release information comes from, and automatic security updates. |
 
-The configuration reference describes every key of every section, with
+The [configuration reference](../reference/configuration.md) describes every key of every section, with
 its type, default, limits and the exact rule it is checked against.
 
 ## How it is checked
