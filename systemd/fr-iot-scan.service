@@ -1,0 +1,50 @@
+[Unit]
+Description=FR_OS IoT device discovery and isolation scan
+Documentation=https://github.com/starsmash29/FR_OS-Community
+After=fr-apply-helper.socket network.target
+Wants=fr-apply-helper.socket
+
+[Service]
+Type=oneshot
+# Parses what LAN hosts send (mDNS answers, the hostnames DHCP clients
+# give), so it runs as fr_os-sensor from the start and never as root.
+# It reads the sensors' view of the config (/etc/fr_os/sensor-view.json,
+# which an apply writes; never config.yaml, ROADMAP SEC-11), the
+# neighbour table and the IEEE OUI registry. Its two privileged steps,
+# reading Kea's leases and replacing the kernel's iot_isolated set, go
+# through the apply-helper's Unix socket, which lets it send only the
+# sensor commands. It writes only the inventory under /etc/fr_os/sensors.
+# Started by fr-iot-scan.timer and by the webUI's "Scan now" (the
+# helper's iot_scan); exits at once when iot.enabled is false.
+User=fr_os-sensor
+Group=fr_os-sensor
+SupplementaryGroups=fr_os-feeds
+ExecStart=/usr/libexec/fr_os/fr-iot-scan
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go), as
+# 1.x's unit has it: no capability at all; UDP for the mDNS query and
+# its answers, Unix sockets for the helper.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/etc/fr_os/sensors
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=

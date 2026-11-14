@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use fros_sensor::helper::HelperError;
 use fros_sensor::pyjson::{self, Dict, PyError, Value};
 use fros_sensor::pytext;
 
@@ -149,12 +150,14 @@ impl View {
     }
 }
 
-/// What a scan reads and asks, in the order 1.x does it. A helper or
-/// mDNS failure is its error text (1.x's HelperError / MdnsError, which
-/// the scan reports and carries on from).
+/// What a scan reads and asks, in the order 1.x does it. An mDNS
+/// failure is its error text (1.x's MdnsError, which the scan reports
+/// and carries on from); a helper failure is the client's
+/// [`HelperError`]: its transport text is reported the same way, an
+/// exception 1.x's client lets through ends the scan.
 pub trait ScanIo {
     /// The apply-helper's `dhcp_leases` reply.
-    fn leases(&mut self) -> Result<Value, String>;
+    fn leases(&mut self) -> Result<Value, HelperError>;
     /// mDNS discovery from the router's own addresses on the IoT zones.
     fn mdns(&mut self, addresses: &[String]) -> Result<MdnsResults, String>;
     fn arp_table(&mut self) -> Result<Vec<ArpEntry>, Crash>;
@@ -162,7 +165,7 @@ pub trait ScanIo {
     /// Where [`ScanIo::vendor_db`] reads, for the message when it's empty.
     fn oui_path(&self) -> String;
     /// The apply-helper's `iot_sync_isolation` reply for these MACs.
-    fn sync(&mut self, macs: &[String]) -> Result<Value, String>;
+    fn sync(&mut self, macs: &[String]) -> Result<Value, HelperError>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -376,7 +379,10 @@ pub fn run_scan(view: &View, io: &mut impl ScanIo, now: f64) -> Result<ScanResul
                 ));
             }
         }
-        Err(text) => messages.push(format!("warning: DHCP leases unavailable: {text}")),
+        Err(HelperError::Transport(text)) => {
+            messages.push(format!("warning: DHCP leases unavailable: {text}"));
+        }
+        Err(HelperError::Raised(name)) => return Err(Crash(name)),
     }
 
     let addresses: Vec<String> = view
@@ -457,10 +463,11 @@ pub fn run_scan(view: &View, io: &mut impl ScanIo, now: f64) -> Result<ScanResul
                 Vec::new()
             }
         }
-        Err(text) => {
+        Err(HelperError::Transport(text)) => {
             messages.push(format!("error: isolation not applied: {text}"));
             Vec::new()
         }
+        Err(HelperError::Raised(name)) => return Err(Crash(name)),
     };
 
     // set(isolated): a list or dict in the reply is unhashable.
