@@ -245,6 +245,25 @@ A difference is either a bug or a written decision
 and a check that every systemd unit is sandboxed.
 [How the differential tests work](AGENTS.md#differential-tests-1x-is-the-specification)
 
+## Where FR_OS fits
+
+There are good open-source firewalls already. This is how FR_OS differs,
+so you can choose the one that fits.
+
+| | FR_OS | pfSense CE and OPNsense | OpenWrt |
+| --- | --- | --- | --- |
+| Base system | Debian Linux, nftables and XDP | FreeBSD, pf | Linux, nftables (firewall4) |
+| Typical hardware | x86-64 PCs, mini PCs and VMs | x86-64 PCs, appliances and VMs | Consumer routers and embedded boards, also x86 |
+| Configuration | One YAML file, validated as a whole | Web interface over an XML configuration | UCI files and the LuCI web interface |
+| Written in | Go and Rust | PHP on top of FreeBSD | Mostly C and shell |
+| Extending it | Built-in features only | Large package ecosystems | Large package ecosystem |
+| Maturity | New: 2.0.0 is its first Go and Rust release | Many years in production | Many years in production |
+
+Choose FR_OS if you want a Linux firewall whose whole control plane you
+can read, with device discovery, DNS and TLS signals built in and every
+change reversible. Choose one of the others if you need its package
+ecosystem, its long track record, or hardware FR_OS doesn't run on.
+
 ## Documentation
 
 The full documentation lives in [docs/wiki](docs/wiki/index.md) and will
