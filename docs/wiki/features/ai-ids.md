@@ -71,10 +71,14 @@ A flagged host is quarantined through the apply-helper: its address goes
 into the `ids_quarantine` nftables set, which is checked before any rule in
 both the input and forward chains. The host can't reach the router or
 anything through it until the quarantine times out
-(`quarantine_duration_seconds`) or you lift it.
+(`quarantine_duration_seconds`): the kernel removes the entry itself.
+The console has no early-release button yet.
 
 Never quarantined: hosts in `excluded_macs`, and infrastructure (the
-router itself, gateways and DNS servers).
+router itself, gateways and DNS servers). An IPv4 host is recognised as
+excluded by its **DHCP reservation**: give the excluded device a
+reservation, so its address is known (an IPv6 host is tracked by its MAC
+anyway).
 
 The **AI IDS/IPS** screen shows the recent events, each with its score,
 its signals and the counters behind them, the hosts in quarantine, and the

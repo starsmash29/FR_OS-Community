@@ -283,6 +283,13 @@ also be published on the project website.
   rules and the VPN to the XDP filter and AI-IDS
 - [Configuration reference](docs/wiki/reference/configuration.md): every
   key of `config.yaml`
+- [Web console guide](docs/wiki/web-console/index.md) ·
+  [firewall-cli](docs/wiki/operations/firewall-cli.md) ·
+  [Backup and recovery](docs/wiki/operations/backup-and-recovery.md) ·
+  [Troubleshooting](docs/wiki/operations/troubleshooting.md)
+- [Security model](docs/wiki/security/index.md) ·
+  [Development](docs/wiki/development/index.md) ·
+  [FAQ](docs/wiki/faq.md) · [Glossary](docs/wiki/glossary.md)
 
 ## Contributing
 
