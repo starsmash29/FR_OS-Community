@@ -113,7 +113,7 @@
     </td>
     <td valign="top">
       <h3>🛡️ Management hardening</h3>
-      <p>The console and SSH listen only in management zones, with a brute-force jail. The web console prefers hybrid post-quantum key exchange (X25519MLKEM768); SSH uses ML-KEM where the installed OpenSSH supports it.</p>
+      <p>The console and SSH listen only in management zones, with a brute-force jail. The web console prefers hybrid post-quantum key exchange (X25519MLKEM768). With the PQC option on, SSH does too where the installed OpenSSH supports it.</p>
     </td>
   </tr>
 </table>
