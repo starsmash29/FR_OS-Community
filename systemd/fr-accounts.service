@@ -17,7 +17,12 @@ ExecStart=/usr/libexec/fr_os/firewall-cli ensure-accounts
 # helper's socket to fr_os-feeds and makes the state directories. No
 # network at all.
 ProtectSystem=strict
-ReadWritePaths=/etc -/var/log/fr_os -/var/log/fr_os-sni -/var/log/fr_os-dns -/run/fr_os
+# ensure-accounts makes /var/log/fr_os (the audit log's directory) on a
+# fresh system: an optional ReadWritePaths= entry for a directory not
+# there yet leaves /var read-only, so systemd makes it, writable here.
+LogsDirectory=fr_os
+LogsDirectoryMode=0750
+ReadWritePaths=/etc -/var/log/fr_os-sni -/var/log/fr_os-dns -/run/fr_os
 PrivateNetwork=yes
 ProtectKernelTunables=yes
 ProtectProc=invisible
