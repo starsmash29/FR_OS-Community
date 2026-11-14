@@ -16,6 +16,11 @@ publish = false
 aya = { version = "=0.14.0", default-features = false }
 # The event logger's JSON, as Python's json.dumps writes it.
 fros-sensor = { path = "../fros-sensor" }
+# The daemons' privilege drop (setgroups, setgid, setuid for every
+# thread), waiting on a ring buffer (poll) and the event file's group
+# (fchown): safe wrappers over libc (MIT), where std has none and the
+# userland crates forbid unsafe.
+nix = { version = "=0.31.3", default-features = false, features = ["user", "poll", "fs"] }
 
 [lints]
 workspace = true

@@ -14,6 +14,11 @@ fros-sensor = { path = "../fros-sensor" }
 # pure-Rust implementations (MIT OR Apache-2.0), no C, no unsafe of ours.
 md-5 = "0.10"
 sha2 = "0.10"
+# fr-tls-fp reads the XDP program's hello_pkts ring buffer and leaves
+# root as the event logger does (fros-xdp's ring and privdrop).
+fros-xdp = { path = "../fros-xdp" }
+# Its uid, for the line it logs once running.
+nix = { version = "=0.31.3", default-features = false, features = ["user"] }
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }

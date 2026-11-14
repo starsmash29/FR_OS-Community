@@ -490,13 +490,39 @@ func checkTree(t *testing.T, f *fakeSystem, got, want map[string]*reference.Appl
 		}
 	}
 	for _, rel := range slices.Sorted(maps.Keys(got)) {
-		if _, ok := want[rel]; !ok {
+		if _, ok := want[rel]; !ok && rel != sensorView {
 			t.Errorf("extra %s", rel)
+		}
+	}
+	// decisions.md, "phase 4e-1": 2.x writes the sensors' view of the
+	// copy next to it, which 1.x's daemons computed from the copy.
+	w, wok := want[sensorCopy]
+	g, gok := got[sensorView]
+	switch {
+	case !wok && gok:
+		t.Errorf("%s without %s", sensorView, sensorCopy)
+	case wok && (w == nil || w.Text == nil):
+		t.Errorf("%s: not text", sensorCopy)
+	case wok && !gok:
+		t.Errorf("missing %s", sensorView)
+	case wok:
+		raw, err := config.LoadYAML(strings.TrimPrefix(*w.Text, apply.SensorCopyHeader))
+		if err != nil {
+			t.Fatalf("%s: %v", sensorCopy, err)
+		}
+		if want := apply.SensorView(raw); g.Text == nil || *g.Text != want {
+			t.Errorf("%s: got %v, want %q", sensorView, g.Text, want)
+		}
+		if g.Mode != w.Mode {
+			t.Errorf("%s: mode %s, want %s as the copy's", sensorView, g.Mode, w.Mode)
 		}
 	}
 }
 
-const sensorCopy = "etc/fr_os/sensor-config.yaml"
+const (
+	sensorCopy = "etc/fr_os/sensor-config.yaml"
+	sensorView = "etc/fr_os/sensor-view.json"
+)
 
 func sameYAML(t *testing.T, got, want string) bool {
 	if !strings.HasPrefix(got, apply.SensorCopyHeader) || !strings.HasPrefix(want, apply.SensorCopyHeader) {

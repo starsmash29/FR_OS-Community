@@ -12,9 +12,11 @@
 //! - [`pyfloat`]: `statistics.mean`/`pstdev`, `round(x, n)`, `sum` and
 //!   float `//`, which Python computes exactly or compensated;
 //! - [`dnsmasq`]: the timestamp prefix of dnsmasq's query log;
+//! - [`helper`]: asking the apply-helper, as 1.x's client does;
 //! - [`reference`]: reading the recorded 1.x cases in the tests.
 
 pub mod dnsmasq;
+pub mod helper;
 pub mod ordered;
 pub mod pyfloat;
 pub mod pyjson;

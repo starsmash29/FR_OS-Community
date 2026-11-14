@@ -79,15 +79,21 @@ func withoutKey(m *config.Map, key string) *config.Map {
 	return out
 }
 
-// WriteSensorCopy writes raw, redacted, as the parser daemons' config:
-// root:fr_os-sensor 0640, replaced atomically, never briefly readable by
-// anyone else.
+// WriteSensorCopy writes raw, redacted, as the parser daemons' config,
+// and next to it their view of it (SensorView): root:fr_os-sensor 0640,
+// replaced atomically, never briefly readable by anyone else.
 func (s *System) WriteSensorCopy(raw config.Value) error {
 	body, err := config.FlowYAML(Redacted(raw))
 	if err != nil {
 		return err
 	}
-	path := s.Paths.SensorConfig
+	if err := s.writeSensorFile(s.Paths.SensorConfig, SensorCopyHeader+body+"\n"); err != nil {
+		return err
+	}
+	return s.writeSensorFile(s.Paths.SensorView, SensorView(raw))
+}
+
+func (s *System) writeSensorFile(path, text string) error {
 	if err := mkdirParent(path); err != nil {
 		return err
 	}
@@ -99,7 +105,7 @@ func (s *System) WriteSensorCopy(raw config.Value) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString(SensorCopyHeader + body + "\n")
+	_, err = f.WriteString(text)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

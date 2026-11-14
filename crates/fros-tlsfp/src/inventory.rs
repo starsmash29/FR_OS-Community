@@ -215,6 +215,12 @@ impl FingerprintInventory {
         Self::try_restore(data, now).unwrap_or_else(|Unreadable| Self::new(now))
     }
 
+    /// `restore`, or `None` where 1.x's restore raises an exception it
+    /// doesn't catch: the daemon puts such a file aside.
+    pub fn restore_checked(data: Option<&Value>, now: f64) -> Option<Self> {
+        Self::try_restore(data, now).ok()
+    }
+
     fn try_restore(data: Option<&Value>, now: f64) -> Result<Self, Unreadable> {
         let Some(Value::Dict(data)) = data else {
             return Ok(Self::new(now));
