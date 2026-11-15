@@ -154,6 +154,12 @@ class _Fake:
             raise FileNotFoundError(2, "No such file or directory", argv[0])
         if answer.get("error") == "timeout":
             raise subprocess.TimeoutExpired(args, timeout)
+        for rel, content in answer.get("writes", {}).items():
+            # {"writes": {path: text}}: the program leaves that file under
+            # the directory after its "-b" (depmod's base directory).
+            base = Path(argv[argv.index("-b") + 1])
+            (base / rel).parent.mkdir(parents=True, exist_ok=True)
+            (base / rel).write_text(content)
         out, err = answer.get("stdout", ""), answer.get("stderr", "")
         if not (text or universal_newlines or encoding):
             out, err = out.encode(), err.encode()
@@ -290,7 +296,8 @@ def system(monkeypatch, tmp_path):
     # one first imported during a session would keep the router's paths.
     from frfw import accounts, cli, provision, rule_hits, schedule_refresh, xdp  # noqa: F401
     from frfw import admin_account, console_ports, initial_password, kernel_boot, netdetect, persistence  # noqa: F401
-    from frfw import skeleton  # noqa: F401
+    from frfw import kernel_update, skeleton  # noqa: F401
+    from frfw.helper import update_server  # noqa: F401
     from frfw.adblock import dns_service  # noqa: F401
     from frfw.helper import server  # noqa: F401
     from frfw.webui import audit  # noqa: F401
@@ -487,6 +494,14 @@ def _snapshot(root: Path, max_text: int = MAX_TEXT) -> dict:
                 entry["len"] = len(text.encode())
             elif text is not None:
                 entry["text"] = text
+            elif name.startswith("initrd.img-") and rel.endswith("kernels"):
+                # An initrd the router made: compared uncompressed (its
+                # early archives as they are, the main one gunzipped), as
+                # gzip's bytes are zlib's own (decisions.md, "phase 4f-3b").
+                from frfw import kernel_update
+
+                early, main = kernel_update._split_initrd(data)
+                entry["initrd"] = (early + main).hex()
             else:
                 entry["hex"] = data.hex()
             files[os.path.relpath(path, root)] = entry
@@ -501,6 +516,7 @@ def _rooted(value, root: str):
         value = value.replace(root, "@ROOT@")
         value = re.sub(re.escape(tmp) + r"/tmp[A-Za-z0-9_]+", "@TMP@/tmp*", value)
         value = re.sub(re.escape(tmp) + r"/fros-persistence-[A-Za-z0-9_]+", "@TMP@/fros-persistence-*", value)
+        value = re.sub(re.escape(tmp) + r"/fros-initrd-[A-Za-z0-9_]+", "@TMP@/fros-initrd-*", value)
         return value.replace(tmp + "/", "@TMP@/")
     if isinstance(value, list):
         return [_rooted(v, root) for v in value]
@@ -527,7 +543,8 @@ def _wait(server, later: float) -> list[str]:
 
 def _session(system, name: str, setup: dict, requests: list, table: list | None = None,
              random: bytes = b"", decided: str | None = None, openssl=OPENSSL,
-             login_users: tuple[str, ...] = (), fetch: list | None = None, accounts: dict | None = None) -> None:
+             login_users: tuple[str, ...] = (), fetch: list | None = None, accounts: dict | None = None,
+             update=None, setup_mtime: float | None = None) -> None:
     from frfw.helper import server as helper_server
     from frfw.helper.peer import PeerPolicy
 
@@ -549,15 +566,24 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
         if isinstance(content, dict) and "link" in content:  # {"link": target}: a symlink
             os.symlink(content["link"], path)
             continue
+        if isinstance(content, bytes):  # a binary file
+            path.write_bytes(content)
+            continue
         if isinstance(content, dict):  # {"size": n}: n zero bytes, sparse
             with open(path, "wb") as f:
                 f.truncate(content["size"])
             continue
         path.write_text(content.replace(FINGERPRINT, fp))
+    if setup_mtime is not None:  # the setup's files all last changed then
+        for rel in setup:
+            if not rel.endswith("/") and (root / rel).is_file() and not (root / rel).is_symlink():
+                os.utime(root / rel, (setup_mtime, setup_mtime))
     before = _snapshot(root, max_text=1 << 20)  # in full: the replay writes it
     for rel, content in setup.items():
         if isinstance(content, dict) and "size" in content:
             before[rel] = {"mode": before[rel]["mode"], "size": content["size"]}
+        elif isinstance(content, bytes):
+            pass
         elif isinstance(content, str) and FINGERPRINT in content:
             before[rel]["text"] = before[rel]["text"].replace(fp, FINGERPRINT)
     server = types.SimpleNamespace(
@@ -577,6 +603,10 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
         try:
             if "wait" in request:  # fr-apply-revert.service, request["wait"] s later
                 reply = {"messages": _wait(server, request["wait"])}
+            elif "update" in request:  # the update-helper (phase 4f-3b)
+                from frfw.helper import update_server
+
+                reply = update_server._handle_request(copy.deepcopy(request["update"]), update)
             elif "cli" in request:  # firewall-cli, its argv with the root as "@ROOT@"
                 fake.passwords = list(request.get("passwords", []))
                 reply = _cli([a.replace("@ROOT@", str(root)) for a in request["cli"]])
@@ -598,6 +628,8 @@ def _session(system, name: str, setup: dict, requests: list, table: list | None 
         case["accounts"] = accounts
     if decided:
         case["decided"] = decided
+    if setup_mtime is not None:
+        case["setup_mtime"] = setup_mtime
     _record(_rooted(case, str(root)))
 
 
@@ -2509,3 +2541,274 @@ def test_cli_kernel(system, monkeypatch, name):
     monkeypatch.setattr(kernel_boot.wait_healthy, "__kwdefaults__",
                         {**kernel_boot.wait_healthy.__kwdefaults__, "clock": lambda: clock[0], "sleep": sleep})
     _session(system, f"cli/kernel/{name}", setup, requests, table, RANDOM)
+
+
+# --- a kernel prepared, then tried (phase 4f-3b) ------------------------------------------
+#
+# firewall-cli kernel prepare|try (fr-kernel-prepare.service, ROADMAP SEC-14
+# step 3) and the update-helper's kernel commands ({"update": request},
+# sent to 1.x's frfw.helper.update_server._handle_request). apt, dpkg and
+# depmod answer from the table; depmod's modules.dep is the entry's
+# "writes", left under its -b directory. The kernel package's files are
+# in the setup (as if apt-get install had put them there): /boot and
+# /usr/lib/modules under the root. The image's initrd is a small one made
+# here: newc cpio archives, gzip'd, with live-boot and one kernel's
+# modules; the one 1.x makes is recorded uncompressed ("initrd").
+
+PREPARED_KERNEL = "6.1.0-28-amd64"
+OLD_KERNEL = "6.1.0-27-amd64"
+CPIO_MTIME = 1790000000
+
+
+def _newc(entries: list) -> bytes:
+    """A newc cpio archive of (name, mode, data), with its trailer."""
+    out, ino = b"", 100
+
+    def one(name: str, mode: int, data: bytes, ino: int) -> bytes:
+        encoded = name.encode() + b"\0"
+        header = b"070701" + b"".join(b"%08X" % v for v in (
+            ino, mode, 0, 0, 2 if mode & 0o040000 else 1, CPIO_MTIME, len(data), 0, 0, 0, 0, len(encoded), 0))
+        return header + encoded + b"\0" * ((4 - (110 + len(encoded)) % 4) % 4) + data + \
+            b"\0" * ((4 - len(data) % 4) % 4)
+
+    for name, mode, data in entries:
+        out += one(name, mode, data, ino)
+        ino += 1
+    return out + one("TRAILER!!!", 0, b"", 0)
+
+
+def _image_initrd(kernel: str = RUNNING_KERNEL, live_boot: bool = True, microcode: bool = False,
+                  kernels: tuple[str, ...] | None = None) -> bytes:
+    import gzip
+
+    d, f, setuid = 0o040755, 0o100644, 0o104755
+    entries = [(".", d, b""), ("bin", d, b""), ("bin/mount", setuid, b"a mount binary\n"),
+               ("dev", d, b""), ("dev/console", 0o020600, b""), ("scripts", d, b"")]
+    if live_boot:
+        entries.append(("scripts/live", f, b"# live-boot\n"))
+    entries += [("usr", d, b""), ("usr/lib", d, b""), ("usr/lib/modules", d, b"")]
+    for k in kernels or (kernel,):
+        base = f"usr/lib/modules/{k}"
+        entries += [(base, d, b""), (f"{base}/kernel", d, b""), (f"{base}/kernel/drivers", d, b""),
+                    (f"{base}/kernel/drivers/net", d, b""),
+                    (f"{base}/kernel/drivers/net/virtio_net.ko", f, b"virtio_net for " + k.encode()),
+                    (f"{base}/kernel/fs", d, b""), (f"{base}/kernel/fs/overlay.ko.xz", f, b"overlay xz"),
+                    (f"{base}/modules.dep", f, b"kernel/drivers/net/virtio_net.ko:\nkernel/fs/overlay.ko.xz:\n")]
+    main = gzip.compress(_newc(entries), mtime=0)
+    early = _newc([("kernel", 0o040755, b""), ("kernel/x86", 0o040755, b""),
+                   ("kernel/x86/microcode", 0o040755, b""),
+                   ("kernel/x86/microcode/GenuineIntel.bin", 0o100644, b"microcode")]) if microcode else b""
+    return early + (b"\0" * 8 if microcode else b"") + main
+
+
+#: The new kernel's modules, as linux-image-<v> installs them: virtio_net
+#: now needs net_failover, which needs failover; snd_dummy is not in the
+#: image's initrd and stays out.
+MODULES_DEP = ("kernel/drivers/net/virtio_net.ko: kernel/drivers/net/net_failover.ko kernel/net/core/failover.ko\n"
+               "kernel/drivers/net/net_failover.ko: kernel/net/core/failover.ko\n"
+               "kernel/net/core/failover.ko:\nkernel/fs/overlay/overlay.ko.xz:\nkernel/sound/snd_dummy.ko:\n"
+               "a line without a colon\n")
+
+
+def _modules(kernel: str = PREPARED_KERNEL, dep: bool = True) -> dict:
+    base = f"usr/lib/modules/{kernel}"
+    files = {f"{base}/kernel/drivers/net/virtio_net.ko": "virtio_net " + kernel,
+             f"{base}/kernel/drivers/net/net_failover.ko": "net_failover",
+             f"{base}/kernel/net/core/failover.ko": "failover",
+             f"{base}/kernel/fs/overlay/overlay.ko.xz": "overlay",
+             f"{base}/kernel/sound/snd_dummy.ko": "snd_dummy",
+             f"{base}/modules.order": "kernel/drivers/net/virtio_net.ko\n",
+             f"{base}/modules.builtin": "kernel/fs/ext4/ext4.ko\n"}
+    if dep:
+        files[f"{base}/modules.dep"] = MODULES_DEP
+    return files
+
+
+SHOW = (f"Package: linux-image-amd64\nVersion: 6.1.158-1\nDepends: linux-image-{PREPARED_KERNEL} (= 6.1.158-1)\n"
+        "Description: Linux for 64-bit PCs (meta-package)\n")
+APT_UPDATE = {"argv": ["apt-get", "update", "-q"], "stdout": "Reading package lists...\n"}
+APT_SHOW = {"argv": ["apt-cache", "show", "--no-all-versions", "--", "linux-image-amd64"], "stdout": SHOW}
+
+
+def _apt(kernel: str = PREPARED_KERNEL, installed: bool = False, size_kib: int = 400 * 1024) -> list:
+    package = f"linux-image-{kernel}"
+    return [{"argv": ["apt-cache", "show", "--no-all-versions", "--", package],
+             "stdout": f"Package: {package}\nInstalled-Size: {size_kib}\n"},
+            {"argv": ["dpkg-query", "-W", "-f=${Status}", "--", package],
+             **({"stdout": "install ok installed"} if installed else
+                {"rc": 1, "stderr": f"dpkg-query: no packages found matching {package}\n"})},
+            {"argv": ["apt-get", "install"], "stdout": f"Setting up {package} ...\n"},
+            {"argv": ["apt-get", "purge"], "stdout": "Removing ...\n"},
+            {"argv": ["depmod", "-b"], "writes": {
+                f"lib/modules/{kernel}/modules.dep":
+                    "kernel/drivers/net/virtio_net.ko: kernel/drivers/net/net_failover.ko\n"}}]
+
+
+#: A live router with persistence and nothing staged: the image's root
+#: with its kernel's modules, the medium's kernel and initrd.
+def _router(initrd: bytes | None = None, **extra) -> dict:
+    return {**_boot(None), "run/live/persistence/sdb3/rw/": "",
+            f"run/live/rootfs/filesystem.squashfs/usr/lib/modules/{RUNNING_KERNEL}/": "",
+            "run/live/medium/live/vmlinuz": VMLINUZ,
+            "run/live/medium/live/initrd.img": _image_initrd() if initrd is None else initrd, **extra}
+
+
+KERNEL_FILES = {f"boot/vmlinuz-{PREPARED_KERNEL}": VMLINUZ, **_modules()}
+STATE = "etc/fr_os/kernel_update.json"
+READY = json.dumps({"installed": [f"linux-image-{PREPARED_KERNEL}"], "prepared": {
+    "version": PREPARED_KERNEL, "kernel": f"@ROOT@/boot/vmlinuz-{PREPARED_KERNEL}",
+    "initrd": f"@ROOT@/var/lib/fr_os/kernels/initrd.img-{PREPARED_KERNEL}",
+    "prepared_at": "2026-11-01T00:00:00+00:00"}}, indent=2, sort_keys=True)
+READY_FILES = {**KERNEL_FILES, f"var/lib/fr_os/kernels/initrd.img-{PREPARED_KERNEL}": INITRD}
+OFF = "etc/fr_os/config.yaml"
+
+
+def _u(cmd, **extra) -> dict:
+    return {"update": {"cmd": cmd, **extra}}
+
+
+PREPARE_SESSIONS = {
+    "prepare, not live": ({"proc/cmdline": "BOOT_IMAGE=/vmlinuz root=/dev/sda2 ro\n", "proc/mounts": ""},
+                          [_k("prepare")], []),
+    "prepare, a newer kernel": (_router(**KERNEL_FILES), [_k("prepare"), _k("status")],
+                                [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, then nothing newer": (_router(**KERNEL_FILES), [_k("prepare"), _k("prepare")],
+                                    [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, already installed": (_router(**KERNEL_FILES), [_k("prepare")],
+                                   [APT_UPDATE, APT_SHOW] + _apt(installed=True)),
+    "prepare, nothing newer": (_router(), [_k("prepare")], [APT_UPDATE, {**APT_SHOW, "stdout": SHOW.replace(
+        PREPARED_KERNEL, RUNNING_KERNEL)}]),
+    "prepare, an older one": (_router(), [_k("prepare")], [APT_UPDATE, {**APT_SHOW, "stdout": SHOW.replace(
+        PREPARED_KERNEL, "6.1.0-9-amd64")}]),
+    "prepare, apt names none": (_router(), [_k("prepare")],
+                                [APT_UPDATE, {**APT_SHOW, "stdout": "Package: linux-image-amd64\nDepends: foo, "
+                                              "linux-image-6.1.0-28-rt-amd64\nPre-Depends: dpkg\n"}]),
+    "prepare, pre-depends": (_router(**KERNEL_FILES), [_k("prepare")],
+                             [APT_UPDATE, {**APT_SHOW, "stdout": "Package: linux-image-amd64\nPre-Depends: "
+                                           f"linux-image-{PREPARED_KERNEL},foo\n"}, FREE] + _apt()),
+    "prepare, apt fails": (_router(), [_k("prepare"), _k("status")],
+                           [{"argv": ["apt-get", "update"], "rc": 100,
+                             "stderr": "E: Could not resolve 'deb.debian.org'\n" + "x" * 600}]),
+    "prepare, apt is missing": (_router(), [_k("prepare")], [{"argv": ["apt-get"], "error": "missing"}]),
+    "prepare, apt times out": (_router(), [_k("prepare")], [{"argv": ["apt-get"], "error": "timeout"}]),
+    "prepare, off": (_router(**{OFF: RICH + "update:\n  kernel_updates: false\n"}), [_k("prepare")], []),
+    "prepare, on": (_router(**KERNEL_FILES, **{OFF: RICH + "update:\n  kernel_updates: true\n"}), [_k("prepare")],
+                    [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, an invalid config": (_router(**{OFF: "version: 1\nupdate:\n  kernel_updates: false\n"}),
+                                   [_k("prepare")], []),
+    "prepare, a broken config": (_router(**KERNEL_FILES, **{OFF: "version: [\n"}), [_k("prepare")],
+                                 [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, off but asked for one": (_router(**KERNEL_FILES, **{OFF: RICH + "update:\n  kernel_updates: false\n"}),
+                                       [_k("prepare", "--version", PREPARED_KERNEL)], [FREE] + _apt()),
+    "prepare, no room": (_router(**KERNEL_FILES), [_k("prepare")],
+                         [APT_UPDATE, APT_SHOW, {"argv": ["statvfs"], "stdout": f"{512 * 2**20}\n"}] + _apt()),
+    "prepare, no installed size": (_router(**KERNEL_FILES), [_k("prepare")],
+                                   [APT_UPDATE, APT_SHOW, FREE,
+                                    {"argv": ["apt-cache", "show", "--no-all-versions", "--",
+                                              f"linux-image-{PREPARED_KERNEL}"], "stdout": "Package: x\n"}] + _apt()),
+    "prepare, it failed here": (_router(**KERNEL_FILES, **_slot("failed", staged=PREPARED_KERNEL)), [_k("prepare")],
+                                [APT_UPDATE, APT_SHOW]),
+    "prepare, a trial staged": (_router(**KERNEL_FILES, **_slot("trial", staged=PREPARED_KERNEL)), [_k("prepare")],
+                                [APT_UPDATE, APT_SHOW]),
+    "prepare, the image's own": (_router(**_modules(RUNNING_KERNEL)),
+                                 [_k("prepare", "--version", RUNNING_KERNEL), _k("status")],
+                                 _apt(RUNNING_KERNEL, installed=True)),
+    "prepare, a bad version": (_router(), [_k("prepare", "--version", "6.1 x"), _k("prepare", "--version", "")],
+                               []),
+    "prepare, the package lacks its kernel": (_router(**_modules()), [_k("prepare")],
+                                              [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, no modules": (_router(**{f"boot/vmlinuz-{PREPARED_KERNEL}": VMLINUZ}), [_k("prepare")],
+                            [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, no image initrd": ({**_router(**KERNEL_FILES), "run/live/medium/live/initrd.img": None},
+                                 [_k("prepare")], [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, no live-boot": (_router(_image_initrd(live_boot=False), **KERNEL_FILES), [_k("prepare")],
+                              [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, two kernels in it": (_router(_image_initrd(kernels=(RUNNING_KERNEL, OLD_KERNEL)), **KERNEL_FILES),
+                                   [_k("prepare")], [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, not an initrd": (_router(b"\x89PNG not an initrd", **KERNEL_FILES), [_k("prepare")],
+                               [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, a torn archive": (_router(_newc([("x", 0o100644, b"y")])[:-40] + b"070701", **KERNEL_FILES),
+                                [_k("prepare")], [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, microcode in front": (_router(_image_initrd(microcode=True), **KERNEL_FILES), [_k("prepare")],
+                                    [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, depmod fails": (_router(**KERNEL_FILES), [_k("prepare")],
+                              [APT_UPDATE, APT_SHOW, FREE, {"argv": ["depmod"], "rc": 1,
+                                                            "stderr": "depmod: FATAL: bad\n"}] + _apt()),
+    "prepare, depmod leaves nothing": (_router(**KERNEL_FILES), [_k("prepare")],
+                                       [APT_UPDATE, APT_SHOW, FREE, {"argv": ["depmod"]}] + _apt()),
+    "prepare, removes the one before": (_router(**KERNEL_FILES, **{STATE: json.dumps({
+        "installed": [f"linux-image-{OLD_KERNEL}", f"linux-image-{RUNNING_KERNEL}"],
+        "prepared": {"version": OLD_KERNEL}, "last_check": {"at": "x", "message": "y", "error": False}})}),
+        [_k("prepare")], [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, keeps a staged one": (_router(**KERNEL_FILES, **_slot("good", staged=OLD_KERNEL), **{STATE: json.dumps({
+        "installed": [f"linux-image-{OLD_KERNEL}"]})}), [_k("prepare")], [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, a state file that isn't one": (_router(**KERNEL_FILES, **{STATE: "[1, 2]"}), [_k("prepare")],
+                                             [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "prepare, a state file that is broken": (_router(**KERNEL_FILES, **{STATE: "{"}), [_k("prepare")],
+                                             [APT_UPDATE, APT_SHOW, FREE] + _apt()),
+    "try, nothing ready": (_router(), [_k("try"), _k("try", "--no-reboot")], []),
+    "try, not live": (_boot(None, persistent=False), [_k("try")], []),
+    "try": (_router(**READY_FILES, **APPLIED, **{STATE: READY}), [_k("try", "--no-reboot"), _k("status")],
+            [FREE] + HEALTHY),
+    "try, and reboot": (_router(**READY_FILES, **{STATE: READY}), [_k("try")], [FREE]),
+    "try, it failed here": (_router(**READY_FILES, **_slot("failed", staged=PREPARED_KERNEL), **{STATE: READY}),
+                            [_k("try")], []),
+    "try, its files gone": (_router(**{STATE: READY}), [_k("try")], [FREE]),
+    "try, usage": (_router(), [_k("try", "now"), _k("prepare", "x"), _k("prepare", "--version")], []),
+    "helper, status": (_router(**READY_FILES, **{STATE: READY}), [
+        _u("kernel_status"), _u("ping")], []),
+    "helper, status, nothing": (_router(), [_u("kernel_status")], []),
+    "helper, status, not live": ({"proc/cmdline": "BOOT_IMAGE=/vmlinuz root=/dev/sda2 ro\n", "proc/mounts": ""},
+                                 [_u("kernel_status"), _u("kernel_try"), _u("kernel_cancel")], []),
+    "helper, status, on its trial": (_router(**READY_FILES, **_slot("trying", staged=PREPARED_KERNEL),
+                                             **{STATE: READY}), [_u("kernel_status")], []),
+    "helper, status, the last check": (_router(**{STATE: json.dumps({"installed": [], "last_check": {
+        "at": "2026-10-31T03:00:00+00:00", "message": "apt failed", "error": True}})}), [_u("kernel_status")], []),
+    "helper, check": (_router(), [_u("kernel_check")], []),
+    "helper, check fails": (_router(), [_u("kernel_check")],
+                            [{"argv": ["systemctl", "start"], "rc": 5, "stderr": "Unit not found.\n"}]),
+    "helper, try": (_router(**READY_FILES, **APPLIED, **{STATE: READY}), [_u("kernel_try"), _u("kernel_status")],
+                    [FREE] + HEALTHY),
+    "helper, try, nothing ready": (_router(), [_u("kernel_try")], []),
+    "helper, try, it failed": (_router(**READY_FILES, **_slot("failed", staged=PREPARED_KERNEL), **{STATE: READY}),
+                               [_u("kernel_try")], []),
+    "helper, try, no room": (_router(**READY_FILES, **{STATE: READY}), [_u("kernel_try")],
+                             [{"argv": ["statvfs"], "stdout": "0\n"}]),
+    "helper, cancel": (_router(**_slot("trial")), [_u("kernel_cancel"), _u("kernel_cancel")], []),
+    "helper, unknown": (_router(), [_u("bogus"), {"update": {}}, _u(None), _u(["kernel_status"])], []),
+}
+
+
+@pytest.mark.parametrize("name", sorted(PREPARE_SESSIONS))
+def test_cli_kernel_prepare(system, monkeypatch, name):
+    from frfw import kernel_boot, kernel_update
+    from frfw.helper import update_server
+
+    root, _ = system
+    setup, requests, table = PREPARE_SESSIONS[name]
+    setup = {k: v for k, v in setup.items() if v is not None}
+    monkeypatch.setattr(os, "uname", lambda: types.SimpleNamespace(release=RUNNING_KERNEL))
+    found = kernel_boot.persistence_root
+
+    def persistence_root(mounts_text=None):
+        at = found(mounts_text)
+        return None if at is None else root / str(at).lstrip("/")
+
+    def disk_usage(path):
+        proc = _hook_fake[0].run(["statvfs", os.fspath(path)], text=True)
+        free = int(proc.stdout or 0)
+        return types.SimpleNamespace(total=free, used=0, free=free)
+
+    monkeypatch.setattr(kernel_boot, "persistence_root", persistence_root)
+    monkeypatch.setattr(kernel_boot.network_now, "__defaults__", (lambda *a, **k: _hook_fake[0].run(*a, **k),))
+    monkeypatch.setattr(kernel_boot.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(kernel_update, "datetime", _FixedDatetime)
+    # /boot and /usr/lib/modules under the root too (bound as defaults).
+    monkeypatch.setattr(kernel_update.prepare, "__kwdefaults__", {
+        **kernel_update.prepare.__kwdefaults__, "boot": root / "boot", "modules_root": root / "usr/lib/modules"})
+    upd = types.SimpleNamespace(
+        kernel_state_path=root / STATE, kernel_boot_dir=kernel_boot.boot_dir,
+        start_unit=update_server._start_unit, alert=update_server._alert,
+        reboot_soon=lambda: _hook_fake[0].run(["systemctl", "reboot"]))
+    setup = {k: (v.replace("@ROOT@", str(root)) if isinstance(v, str) else v) for k, v in setup.items()}
+    _session(system, f"cli/kernel/{name}", setup, requests, table, RANDOM, update=upd, setup_mtime=CPIO_MTIME)

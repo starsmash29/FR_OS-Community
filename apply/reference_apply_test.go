@@ -63,6 +63,8 @@ type fakeSystem struct {
 	tmpName   *regexp.Regexp
 	// persistName is the persistence filesystem's temporary mount point.
 	persistName *regexp.Regexp
+	// initrdName is where a kernel's initrd is put together.
+	initrdName *regexp.Regexp
 	// passwords answer the step's password prompts, in order.
 	passwords []string
 	passed    map[int]int
@@ -139,6 +141,7 @@ type call struct {
 func (f *fakeSystem) norm(s string) string {
 	s = strings.ReplaceAll(s, f.root, "@ROOT@")
 	s = f.persistName.ReplaceAllString(s, "@TMP@/fros-persistence-*")
+	s = f.initrdName.ReplaceAllString(s, "@TMP@/fros-initrd-*")
 	s = f.tmpName.ReplaceAllString(s, "@TMP@/tmp*")
 	return strings.ReplaceAll(s, f.tmp+"/", "@TMP@/")
 }
@@ -171,6 +174,15 @@ func (f *fakeSystem) run(c apply.Cmd) (apply.Result, error) {
 				return apply.Result{}, &apply.TimeoutError{Argv: c.Argv, Timeout: c.Timeout}
 			}
 			res = apply.Result{Stdout: a.Stdout, Stderr: a.Stderr, Code: a.RC}
+			// {"writes": {path: text}}: what it leaves under its -b
+			// directory (depmod's modules.dep).
+			if b := slices.Index(c.Argv, "-b"); len(a.Writes) > 0 && b >= 0 && b+1 < len(c.Argv) {
+				for rel, text := range a.Writes {
+					path := filepath.Join(c.Argv[b+1], rel)
+					os.MkdirAll(filepath.Dir(path), 0o755)
+					os.WriteFile(path, []byte(text), 0o644)
+				}
+			}
 			break
 		}
 	}
@@ -232,7 +244,8 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 	tmp := filepath.Clean(os.TempDir())
 	f := &fakeSystem{root: root, tmp: tmp, table: c.Table, random: random, passed: map[int]int{},
 		tmpName:     regexp.MustCompile(regexp.QuoteMeta(tmp) + `/tmp[A-Za-z0-9_]+`),
-		persistName: regexp.MustCompile(regexp.QuoteMeta(tmp) + `/fros-persistence-[A-Za-z0-9_]+`)}
+		persistName: regexp.MustCompile(regexp.QuoteMeta(tmp) + `/fros-persistence-[A-Za-z0-9_]+`),
+		initrdName:  regexp.MustCompile(regexp.QuoteMeta(tmp) + `/fros-initrd-[A-Za-z0-9_]+`)}
 	if c.Accounts != nil {
 		f.accounts = &reference.ApplyAccounts{Users: maps.Clone(c.Accounts.Users), Groups: map[string]*reference.ApplyGroup{}}
 		for name, g := range c.Accounts.Groups {
@@ -240,6 +253,14 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 		}
 	}
 	materialize(t, root, c.Setup)
+	if c.SetupMtime != 0 { // the setup's files all last changed then
+		at := time.Unix(int64(c.SetupMtime), 0)
+		for rel, e := range c.Setup {
+			if !strings.HasSuffix(rel, "/") && e != nil && e.Link == "" {
+				os.Chtimes(filepath.Join(root, rel), at, at)
+			}
+		}
+	}
 
 	sec, frac := math.Modf(c.Now)
 	now := time.Unix(int64(sec), int64(frac*1e9))
@@ -325,6 +346,12 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 		return helper.Policy{FullUIDs: map[int]bool{0: true}, SensorUIDs: map[int]bool{}}
 	}}
 
+	// The update-helper (phase 4f-3b), asked by root; "try it" reboots
+	// at once.
+	u := &helper.UpdateServer{Sys: sys, Policy: func() helper.Policy {
+		return helper.Policy{FullUIDs: map[int]bool{0: true}, SensorUIDs: map[int]bool{}}
+	}, RebootSoon: func() { f.run(apply.Cmd{Argv: []string{"systemctl", "reboot"}}) }}
+
 	bpftool := map[int]int{} // the table's bpftool answers given
 	for i, step := range c.Steps {
 		start := len(f.calls)
@@ -354,6 +381,9 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 			checkCalls(t, where, f.calls[start:], calls)
 			checkCLI(t, where, step, code, f.norm(stdout.String()), f.norm(stderr.String()))
 			continue
+		} else if request, ok := updateOf(t, step.Request); ok {
+			line := append(request, '\n')
+			got, err = u.Answer(bufio.NewReader(bytes.NewReader(line)), 1, 0)
 		} else {
 			line := append(bytes.Clone(step.Request), '\n')
 			got, err = s.Answer(bufio.NewReader(bytes.NewReader(line)), 1, 0)
@@ -463,6 +493,16 @@ func checkCLI(t *testing.T, where string, step reference.ApplyStep, code int, st
 	if stderr != want.Stderr {
 		t.Errorf("%s: stderr\n got %q\nwant %q", where, short(stderr), short(want.Stderr))
 	}
+}
+
+// updateOf is the update-helper's request in {"update": request}.
+func updateOf(t *testing.T, request jsontext.Value) ([]byte, bool) {
+	var r map[string]jsontext.Value
+	if err := json.Unmarshal(request, &r); err != nil {
+		return nil, false
+	}
+	inner, ok := r["update"]
+	return []byte(inner), ok
 }
 
 func waitOf(t *testing.T, request jsontext.Value) (float64, bool) {
@@ -631,7 +671,7 @@ func materialize(t *testing.T, root string, files map[string]*reference.ApplyFil
 		case e.Text != nil && strings.Contains(*e.Text, setupFingerprint):
 			data = []byte(strings.ReplaceAll(*e.Text, setupFingerprint, fingerprintOf(t, root, files)))
 		case e.Text != nil:
-			data = []byte(*e.Text)
+			data = []byte(strings.ReplaceAll(*e.Text, "@ROOT@", root))
 		case e.Hex != "":
 			data, _ = hex.DecodeString(e.Hex)
 		default:
@@ -763,6 +803,14 @@ func checkTree(t *testing.T, f *fakeSystem, got, want map[string]*reference.Appl
 					gt = *g.Text
 				}
 				t.Errorf("%s:\n got %q\nwant %q", rel, short(gt), short(*w.Text))
+			}
+		case w.Initrd != "":
+			// An initrd the router made: compared uncompressed
+			// (decisions.md, "phase 4f-3b").
+			data, _ := hex.DecodeString(g.Hex)
+			early, main, err := apply.SplitInitrd(data, apply.Decompress)
+			if err != nil || hex.EncodeToString(append(early, main...)) != w.Initrd {
+				t.Errorf("%s: not the same initrd (%v)", rel, err)
 			}
 		case w.Hex != "":
 			if g.Hex != w.Hex {

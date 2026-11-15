@@ -108,6 +108,8 @@ Done. Next steps:
   systemctl enable --now fr-schedule-check.timer  # keeps time-based rules right across DST changes
   systemctl enable --now fr-tls-fp                # TLS fingerprinting (idles until tls_fingerprint.enabled)
   systemctl enable --now fr-adblock-refresh.timer  # daily ad-block list refresh (needs 'dnsmasq' installed)
+  systemctl enable --now fr-update-helper.socket   # the webUI's Update screen (kernel trials)
+  systemctl enable --now fr-kernel-prepare.timer   # Debian's newer kernel, ready to try (live router with persistence)
   systemctl enable --now fr-dns-log-trim.timer     # hourly size cap for the resolver's query log
   systemctl enable --now fr-console-ports         # ports, links and the webUI's address on the console
 

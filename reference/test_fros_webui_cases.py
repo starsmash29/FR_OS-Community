@@ -1834,6 +1834,25 @@ SESSIONS = {
         [*_login(), {"get": "/update"}],
         [{"cmd": "https://api.github.com/repos/someone/fr-fork/releases/latest", "socket": HTTPS,
           "reason": "timed out"}]),
+    # The kernel card's buttons (phase 4f-3b): each asks the update-helper
+    # once and says what it answered.
+    "update/kernel": ({"accounts": [ADMIN, VIEWER]}, [
+        *_login(), {"post": "/update/kernel/check", "form": {}}, {"post": "/update/kernel/check", "form": {}},
+        {"post": "/update/kernel/try", "form": {}}, {"post": "/update/kernel/try", "form": {}},
+        {"post": "/update/kernel/try", "form": {}}, {"post": "/update/kernel/cancel", "form": {}},
+        {"post": "/update/kernel/cancel", "form": {}}, {"post": "/update/kernel/check", "form": {}, "csrf": "wrong"},
+        {"post": "/logout"}, *_login(VIEWER), {"post": "/update/kernel/try", "form": {}}],
+        [{"cmd": "kernel_check", "socket": UPDATE_SOCKET, "times": 1, "reply": {
+            "ok": True, "message": "Checking Debian for a newer kernel -- this page shows the result"}},
+         {"cmd": "kernel_check", "socket": UPDATE_SOCKET, "times": 1, "error": True},
+         {"cmd": "kernel_try", "socket": UPDATE_SOCKET, "times": 1, "reply": {
+             "ok": True, "message": "Kernel 6.1.0-28-amd64 staged -- the router reboots into its trial now"}},
+         {"cmd": "kernel_try", "socket": UPDATE_SOCKET, "times": 1, "reply": {
+             "ok": False, "message": "no kernel is ready to try <b>"}},
+         {"cmd": "kernel_try", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": False}},
+         {"cmd": "kernel_cancel", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True}},
+         {"cmd": "kernel_cancel", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "message": ""}},
+         {"cmd": "kernel_try", "socket": UPDATE_SOCKET, "reply": {"ok": True, "message": "viewer"}}]),
     "update/settings": ({"accounts": [ADMIN, VIEWER]}, [
         *_login(), {"post": "/update/auto-security", "form": {"enabled": "true"}}, {"get": "/update?success=ok"},
         {"post": "/update/auto-security", "form": {}},

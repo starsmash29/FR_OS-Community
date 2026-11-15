@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot the FR_OS ISO in QEMU the way a user would, eight times, and check
+"""Boot the FR_OS ISO in QEMU the way a user would, ten times, and check
 that it actually works and remembers what it was told.
 
     sudo installer/qemu-boot-test.py installer/live-build/binary.hybrid.iso
@@ -53,11 +53,19 @@ boxes: the LAN must stay out of its way (ROADMAP NET-12).
    boot 7, the image's own kernel, which raises a security alert. Boot 8
    tries one whose initrd is broken: the kernel panics and reboots
    (panic=10), and GRUB has recorded the try.
-FR_OS 1.x's boot test went on to boots 9 and 10 (the Update screen's
-kernel card), and checked the router's files against its signed release
-and the persistence layer for planted files (SEC-15, SEC-22, SEC-29) and
-the update helper's refusal of an older release (SEC-12). FR_OS 2 has
-none of that yet: those checks come back with phases 4f-3b and 4f-4.
+9. Ninth and tenth boot: the Update screen's kernel card (ROADMAP SEC-14,
+   step 3). "Check now" starts fr-kernel-prepare, pointed at the running
+   kernel (no newer Debian kernel is needed to test the path): the router
+   makes that kernel's initrd itself -- the image's own, its modules
+   exchanged -- and the screen offers to try it. "Try it" stages it
+   through the update-helper and reboots; boot 10 comes up on the
+   router-built initrd, and the router confirms the trial against what
+   worked when it was started (SEC-23).
+FR_OS 1.x's boot test went on to check the router's files against its
+signed release and the persistence layer for planted files (SEC-15,
+SEC-22, SEC-29) and the update helper's refusal of an older release
+(SEC-12). FR_OS 2 has none of that yet: those checks come back with
+phase 4f-4.
 
 With --uefi the VM boots with UEFI firmware (OVMF, the `ovmf` package)
 instead of BIOS; the CI runs the test both ways. Either way the kernel has
@@ -1198,6 +1206,136 @@ def run_kernel_trials(check, workdir: Path, disk: Path, iso: Path, kvm: bool, ue
     with persistence_partition(disk) as upper:
         check(kernel_env(upper).get("fr_os_state") == "trying",
               "GRUB recorded the try first ('trying'): the next boot is the image's own kernel")
+
+
+#: Points fr-kernel-prepare at the running kernel for boots 9-10: the
+#: router prepares it without the network (no newer Debian kernel is
+#: needed to test the path).
+PREPARE_DROPIN = Path("etc") / "systemd" / "system" / "fr-kernel-prepare.service.d" / "boot-test.conf"
+
+
+def unstage_kernel(upper: Path) -> None:
+    """The admin's "back to the image's kernel", as `firewall-cli kernel
+    unstage` does it: nothing staged in the boot environment, the slot
+    gone."""
+    boot_dir = upper.parent / KERNEL_BOOT_DIR
+    if (boot_dir / "grubenv").exists():
+        write_grubenv(boot_dir / "grubenv", {})
+    shutil.rmtree(boot_dir / "staged", ignore_errors=True)
+
+
+def compare_initrds(iso: Path, built: Path) -> None:
+    """What the initrd the router built has, or lacks, compared with the
+    image's own -- printed, for a trial that doesn't come up."""
+    if not shutil.which("lsinitramfs") or not built.is_file():
+        print(f"(initrd comparison skipped: lsinitramfs {'missing' if not shutil.which('lsinitramfs') else 'ok'}, "
+              f"{built} {'there' if built.is_file() else 'missing'})")
+        return
+    with iso_contents(iso) as contents:
+        image = set(subprocess.run(["lsinitramfs", str(contents / "live" / "initrd.img")],
+                                   capture_output=True, text=True).stdout.split())
+    router = set(subprocess.run(["lsinitramfs", str(built)], capture_output=True, text=True).stdout.split())
+    print(f"initrd: image {len(image)} entries, router-built {len(router)} ({built.stat().st_size} bytes)")
+    only_image = sorted(path for path in image - router if "/kernel/" not in path)
+    only_router = sorted(path for path in router - image if "/kernel/" not in path)
+    print("  only in the image's (not modules):", only_image[:80])
+    print("  only in the router's (not modules):", only_router[:80])
+    print(f"  modules: image {sum('/kernel/' in p for p in image)}, router {sum('/kernel/' in p for p in router)}")
+
+
+def wait_screen_confirmed(opener, timeout: float = HEALTH_TIMEOUT + 60) -> bool:
+    """Until the Update screen says the staged kernel is confirmed."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if "confirmed: boots by default" in get(opener, "/update"):
+            return True
+        time.sleep(3)
+    return False
+
+
+def run_kernel_update_from_the_webui(check, workdir: Path, disk: Path, iso: Path, kvm: bool, uefi,
+                                     boot_timeout: float) -> None:
+    """Boots 9-10: the Update screen's kernel card -- "Check now", the
+    router builds the kernel's initrd itself, "Try it" reboots into the
+    trial, and the router keeps it (ROADMAP SEC-14, step 3)."""
+    version = re.search(r"Linux version (\S+)", (workdir / "boot4.log").read_text(errors="replace"))
+    version = version.group(1) if version else "0.0.0-fros-test"
+    with persistence_partition(disk, writable=True) as upper:
+        # Boot 8's broken trial is the same version, and a failed one is
+        # never tried again.
+        unstage_kernel(upper)
+        dropin = upper / PREPARE_DROPIN
+        dropin.parent.mkdir(parents=True, exist_ok=True)
+        dropin.write_text("[Service]\nExecStart=\n"
+                          f"ExecStart=/usr/libexec/fr_os/firewall-cli kernel prepare --version {version}\n")
+
+    print("boot 9: the Update screen's kernel card -- check, ready, try")
+    vm = Vm(workdir, disk, 9, kvm, uefi)
+    opener = webui_opener()
+    page = wait_for_webui(opener, boot_timeout)
+    landed = post(opener, "/login", {"username": NEW_USERNAME, "password": NEW_PASSWORD}) if page else ""
+    check(landed.endswith("/"), "signed in")
+    ready = False
+    card = ""
+    if landed:
+        post(opener, "/update/kernel/check", {})
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            card = get(opener, "/update").split('id="kernel"', 1)[-1].split("</div>", 1)[0]
+            if 'id="kernel-try"' in card or "failed" in card:
+                break
+            time.sleep(10)
+        ready = 'id="kernel-try"' in card
+        check(ready, f"the router prepared kernel {version} itself -- its initrd the image's own with that "
+                     "kernel's modules -- and the Update screen offers to try it"
+              + ("" if ready else f": {re.sub(r'<[^>]+>', ' ', card)[:400]}"))
+    if ready:
+        post(opener, "/update/kernel/try", {})
+    rebooted = vm.wait_exit(boot_timeout)
+    vm.kill()
+    check(ready and rebooted, "\"Try it\" rebooted the router into the trial")
+    with persistence_partition(disk, writable=True) as upper:
+        prepare = journal(upper, "-b", "-u", "fr-kernel-prepare.service")
+        if not ready:
+            print(prepare[-3000:])
+            print_journal(upper, "fr-update-helper.service", "-b")
+        audit_log = (upper / "var" / "log" / "fr_os" / "audit.log").read_text()
+        check(f"kernel {version} is ready to try" in audit_log and f"kernel {version} staged from the webUI" in audit_log,
+              "both are in the security alerts: the kernel ready, and the trial started from the webUI")
+        (upper / PREPARE_DROPIN).unlink()
+        (upper / PREPARE_DROPIN).parent.rmdir()
+        compare_initrds(iso, upper.parent / KERNEL_BOOT_DIR / "staged" / "initrd.img")
+    if not ready:
+        return
+
+    print("boot 10: the trial of the kernel the router prepared")
+    vm = Vm(workdir, disk, 10, kvm, uefi)
+    opener = webui_opener()
+    page = wait_for_webui(opener, boot_timeout)
+    check("fr_os.kernel=trial" in command_line(vm.log()), "GRUB booted it for its trial")
+    check(page is not None, "...the router came up on its own initrd")
+    landed = post(opener, "/login", {"username": NEW_USERNAME, "password": NEW_PASSWORD}) if page else ""
+    confirmed = bool(landed) and wait_screen_confirmed(opener)
+    check(confirmed, "...and the Update screen says it is confirmed: the router's kernel now")
+    running = vm.proc.poll() is None
+    check(running and vm.power_off(), "powered off" if running else "powered off (it had already stopped by itself)")
+    vm.kill()
+    if page is None or not confirmed:
+        print_serial_tail(vm.log())
+    with persistence_partition(disk) as upper:
+        check(kernel_env(upper).get("fr_os_state") == "good", "the boot environment agrees ('good')"
+              + f": {kernel_env(upper).get('fr_os_state')!r}")
+        # ROADMAP SEC-23: "Try it" recorded what worked, and the trial was
+        # checked against it -- the links, the XDP filter, the VPN, Kea.
+        confirm = journal(upper, "-b", "-u", "fr-kernel-confirm.service")
+        recorded = re.search(r"what worked before it works: (.*)", confirm)
+        check(recorded is not None and all(item in recorded.group(1) for item in (
+                  "links ens3, ens4", f"ens4 {WEBUI_HOST}/24", "XDP on ens4", "wg0", "kea-dhcp4-server.service")),
+              "the trial was checked against what worked when it was started: links, addresses, XDP, the VPN, "
+              "the services (ROADMAP SEC-23)" + (f": {recorded.group(1)[:300]}" if recorded else ""))
+        if page is None or not confirmed:
+            print(journal(upper, "-b", "-p", "warning")[-4000:])
+            print_journal(upper, "fr-kernel-confirm.service", "-b")
 
 
 def group_id(upper: Path, name: str) -> int | None:
@@ -2487,6 +2625,7 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
         check(not failed, f"no unit failed to start{': ' + ', '.join(failed) if failed else ''}")
 
     run_kernel_trials(check, workdir, disk, Path(args.iso), kvm, uefi, boot_timeout)
+    run_kernel_update_from_the_webui(check, workdir, disk, Path(args.iso), kvm, uefi, boot_timeout)
 
     print()
     if check.failures:

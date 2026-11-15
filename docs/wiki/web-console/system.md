@@ -6,10 +6,10 @@ Security score and Users (Users is on
 
 ## Update
 
-> **Status.** In this version the Update screen shows and checks, but
-> does not install. Installing a release, rolling back and trying a new
-> kernel go through the update-helper, which arrives with a later 2.0
-> phase; until then those buttons answer *Not ported to FR_OS 2 yet*.
+> **Status.** In this version the Update screen's kernel card works
+> (check now, try, cancel), but releases are not installed from it yet:
+> installing a release and rolling back arrive with a later 2.0 phase;
+> until then those buttons answer *Not ported to FR_OS 2 yet*.
 
 | Card | Contents |
 | --- | --- |

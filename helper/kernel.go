@@ -93,6 +93,69 @@ func (c *cli) kernel(a *cliArgs) (int, bool, error) {
 			_, _ = sys.Run(apply.Cmd{Argv: []string{"systemctl", "reboot"}})
 		}
 		return 0, true, nil
+	case "kernel prepare":
+		return c.kernelPrepare(a)
+	case "kernel try":
+		dir, ok := sys.KernelBootDir()
+		if !ok {
+			c.eprintln(noKernelBootDir)
+			return 1, true, nil
+		}
+		version, err := sys.TryPreparedKernel(dir)
+		if err != nil {
+			if !apply.KernelCaught(err) {
+				return 0, true, err
+			}
+			c.eprintln("error: " + apply.KernelErrorText(err))
+			return 1, true, nil
+		}
+		sys.Alert("kernel "+version+" staged for its trial boot (firewall-cli kernel try)", "console", "console")
+		if a.flags["--no-reboot"] {
+			c.println("Kernel " + version + " staged: the next reboot tries it once.")
+			return 0, true, nil
+		}
+		c.println("Kernel " + version + " staged: rebooting into its trial.")
+		_, _ = sys.Run(apply.Cmd{Argv: []string{"systemctl", "reboot"}})
+		return 0, true, nil
 	}
 	return 0, strings.HasPrefix(a.command, "kernel "), nil
+}
+
+// kernelPrepare is fr-kernel-prepare.service: Debian's newer kernel
+// installed and its initrd made, ready for the admin to try (ROADMAP
+// SEC-14, step 3). It never stages and never reboots.
+func (c *cli) kernelPrepare(a *cliArgs) (int, bool, error) {
+	sys := c.s.sys()
+	dir, ok := sys.KernelBootDir()
+	if !ok {
+		c.println("fr-kernel: no persistence partition in use; nothing to prepare")
+		return 0, true, nil
+	}
+	path, given := a.values["--config"]
+	if !given {
+		path = sys.Paths.Config
+	}
+	enabled := true // no or a broken config: the default
+	if cfg, _, err := apply.ReadConfig(path); err == nil {
+		enabled = cfg.Update.KernelUpdates
+	}
+	version, given := a.values["--version"]
+	outcome, err := sys.PrepareKernel(version, given, enabled, dir)
+	if err != nil {
+		if !apply.KernelCaught(err) {
+			return 0, true, err
+		}
+		text := apply.KernelErrorText(err)
+		_ = sys.RecordKernelCheck(text, true)
+		c.println("fr-kernel: could not prepare a kernel: " + text)
+		return 1, true, nil
+	}
+	if err := sys.RecordKernelCheck(outcome.Message, false); err != nil {
+		return 0, true, err
+	}
+	c.println("fr-kernel: " + outcome.Message)
+	if outcome.Alert != "" {
+		sys.Alert(outcome.Alert, "fr-kernel-prepare", "timer")
+	}
+	return 0, true, nil
 }
