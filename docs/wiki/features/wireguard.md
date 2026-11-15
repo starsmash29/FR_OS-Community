@@ -24,7 +24,9 @@ wireguard:
 
 Or on the **VPN** screen: set the router's tunnel address and the address
 devices reach the router at, tick **VPN on**, click **Save settings** and
-then **Apply**. The first apply with the VPN on makes the
+then **Apply**. Turning it on there also declares the `vpn` zone and adds
+the rules `webui-from-vpn`, `ssh-from-vpn` and `vpn-to-lan` if they are
+missing. The first apply with the VPN on makes the
 router's key pair.
 
 The tunnel's zone (`vpn` by default) must be declared and must not face

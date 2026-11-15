@@ -53,19 +53,38 @@ to check it. Start at the [feature overview](features/index.md).
 | --- | --- |
 | [Configuration reference](reference/configuration.md) | Every key of `config.yaml`: its type, default, limits and the exact rule it is checked against |
 
-## Coming next
+## Web console
 
-These sections are being written and will appear here as they are
-finished:
+| Page | What you find |
+| --- | --- |
+| [The web console](web-console/index.md) | Reaching it, the layout, save and apply, roles and sessions |
+| [Signing in and accounts](web-console/accounts.md) | Sign-in, first-run setup, second factors, users, the audit log |
+| [Dashboard and applying](web-console/dashboard.md) | The apply buttons, the confirmation banner, the alerts and cards |
+| [Network screens](web-console/network.md) | Interfaces, Segments, Rules, NAT, DHCP, VPN |
+| [Protection screens](web-console/protection.md) | AI IDS/IPS, TLS SNI Filter, Ad-Block, IoT Devices, Applications, TLS Fingerprints, ZTNA Gate |
+| [System screens](web-console/system.md) | Update, System, Attack surface, Security score |
 
-- **Web console guide:** every screen, field by field.
-- **Operations:** the `firewall-cli` command reference, backups,
-  updates, logs and troubleshooting.
-- **Security:** the security model and the requirements every feature
-  meets.
-- **Development:** building, testing, the differential tests against
-  FR_OS 1.x, and contributing.
-- **FAQ and glossary.**
+## Operations
+
+| Page | What you find |
+| --- | --- |
+| [firewall-cli](operations/firewall-cli.md) | Every command of the router's command line |
+| [Backup and recovery](operations/backup-and-recovery.md) | What to keep, how to restore, how to get back in |
+| [Updates](operations/updates.md) | Debian fixes, the kernel, FR_OS releases and their signatures |
+| [Troubleshooting](operations/troubleshooting.md) | Symptoms, checks and the commands that help |
+
+## Security and development
+
+| Page | What you find |
+| --- | --- |
+| [Security model](security/index.md) | What stands between an attacker and your network |
+| [Development](development/index.md) | The code, the toolchains, building, the rules every change follows |
+| [Testing](development/testing.md) | Unit tests, differential tests against 1.x, the XDP replay, the boot test |
+
+## Help
+
+- [Frequently asked questions](faq.md)
+- [Glossary](glossary.md)
 
 ## Conventions
 
