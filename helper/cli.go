@@ -52,6 +52,8 @@ const cliUsage = `usage: firewall-cli COMMAND ...
   console-ports [--print] [--watch] show the ports on the console's login screen
   persistence status | auto [--reboot] | create DISK [--wipe] [--yes]
                                     keep a live-booted router's state across reboots
+  kernel status | stage KERNEL INITRD --version RELEASE | unstage | confirm-boot
+                                    a kernel staged on the persistence partition, tried once
 
 CONFIG defaults to /etc/fr_os/config.yaml.
 `
@@ -92,6 +94,11 @@ var cliCommands = []cliCommand{
 	{name: "persistence status"},
 	{name: "persistence auto", flags: []string{"--reboot"}},
 	{name: "persistence create", flags: []string{"--wipe", "--yes"}, positional: []string{"disk"}},
+	{name: "kernel status"},
+	{name: "kernel stage", values: []string{"--version"}, required: []string{"--version"},
+		positional: []string{"kernel", "initrd"}},
+	{name: "kernel unstage"},
+	{name: "kernel confirm-boot"},
 }
 
 type cliArgs struct {
@@ -140,9 +147,9 @@ func parseCLI(args []string, defaultConfig string) (*cliArgs, error) {
 	}
 	name := args[0]
 	rest := args[1:]
-	if name == "persistence" {
+	if name == "persistence" || name == "kernel" {
 		if len(rest) == 0 {
-			return nil, usageError("the following arguments are required: persistence_command")
+			return nil, usageError("the following arguments are required: " + name + "_command")
 		}
 		name, rest = name+" "+rest[0], rest[1:]
 	}
@@ -342,6 +349,9 @@ func (c *cli) run(a *cliArgs) (int, error) {
 		return 0, nil
 	}
 	if code, ok, err := c.firstBoot(a); ok {
+		return code, err
+	}
+	if code, ok, err := c.kernel(a); ok {
 		return code, err
 	}
 	return 2, nil

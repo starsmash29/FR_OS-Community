@@ -62,6 +62,9 @@ type Paths struct {
 	// mounts, the block devices in sysfs, and where their nodes are
 	// (/dev; the names on command lines stay /dev/...).
 	Cmdline, Mounts, SysBlock, Dev string
+	// LiveRoot is where the mount points /proc/mounts names are: the
+	// persistence filesystem a kernel is staged on (frfw.kernel_boot).
+	LiveRoot string
 }
 
 // DefaultPaths are the router's.
@@ -92,6 +95,7 @@ func DefaultPaths() Paths {
 		Issue:    "/etc/issue", InitialIssue: "/etc/issue.d/fr_os-initial-admin.issue",
 		PortsIssue: "/etc/issue.d/fr_os-ports.issue",
 		Cmdline:    "/proc/cmdline", Mounts: "/proc/mounts", SysBlock: "/sys/class/block", Dev: "/dev",
+		LiveRoot: "/",
 	}
 }
 
@@ -178,6 +182,16 @@ type System struct {
 	// Getpass asks the console for a password (getpass.getpass):
 	// ErrNoInput at the end of input.
 	Getpass func(prompt string) (string, error)
+	// What a staged kernel's commands ask the machine (frfw.kernel_boot):
+	// the running kernel's release (os.uname), the free bytes of a
+	// filesystem (shutil.disk_usage), whether something answers TCP on
+	// host:port (the webUI on loopback), and the clock and sleep of the
+	// wait for a trial boot to come up, in seconds.
+	KernelRelease func() string
+	DiskFree      func(path string) (uint64, error)
+	Dial          func(host string, port int, timeout time.Duration) error
+	HealthClock   func() float64
+	HealthSleep   func(seconds float64)
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;
@@ -200,6 +214,11 @@ func DefaultSystem() *System {
 		User:           lookupUser,
 		Group:          lookupGroup,
 		Getpass:        getpass,
+		KernelRelease:  kernelRelease,
+		DiskFree:       diskFree,
+		Dial:           dialTCP,
+		HealthClock:    monotonic(),
+		HealthSleep:    func(seconds float64) { time.Sleep(time.Duration(seconds * float64(time.Second))) },
 	}
 }
 

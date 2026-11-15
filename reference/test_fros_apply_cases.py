@@ -289,7 +289,8 @@ def system(monkeypatch, tmp_path):
     # Every module an apply uses is imported before the paths are moved:
     # one first imported during a session would keep the router's paths.
     from frfw import accounts, cli, provision, rule_hits, schedule_refresh, xdp  # noqa: F401
-    from frfw import admin_account, console_ports, initial_password, netdetect, persistence, skeleton  # noqa: F401
+    from frfw import admin_account, console_ports, initial_password, kernel_boot, netdetect, persistence  # noqa: F401
+    from frfw import skeleton  # noqa: F401
     from frfw.adblock import dns_service  # noqa: F401
     from frfw.helper import server  # noqa: F401
     from frfw.webui import audit  # noqa: F401
@@ -2276,3 +2277,235 @@ FIRST_BOOT_SESSIONS = {
 def test_cli_first_boot(system, name):
     setup, requests, table = FIRST_BOOT_SESSIONS[name]
     _session(system, f"cli/first boot/{name}", setup, requests, table, RANDOM)
+
+
+# --- a staged kernel, tried once (phase 4f-3a) -----------------------------------------
+#
+# firewall-cli kernel status|stage|unstage|confirm-boot (ROADMAP SEC-14):
+# the persistence filesystem live-boot mounted (/proc/mounts) is under
+# the root, at its mount point; what kernel runs is RUNNING_KERNEL
+# (os.uname); and the questions 1.x asks Python, not a program, are
+# pseudo-calls: ["statvfs", path] (shutil.disk_usage; its stdout the
+# free bytes), ["connect", host, port, timeout] (the webUI's answer on
+# loopback; rc 0 is an answer) and ["sleep", seconds] (wait_healthy,
+# whose clock starts at 0 and moves on by each sleep).
+
+RUNNING_KERNEL = "6.1.0-26-amd64"
+STAGED_KERNEL = "6.1.0-28-amd64"
+SLOT_DIR = "run/live/persistence/sdb3/fr_os-boot"
+#: An x86 Linux boot image as far as 1.x looks: "HdrS" at 0x202.
+VMLINUZ = "k" * 0x202 + "HdrS" + " a kernel\n"
+INITRD = "an initrd\n"
+GiB = 2**30
+FREE = {"argv": ["statvfs"], "stdout": f"{8 * GiB}\n"}
+UP = {"argv": ["nft", "list", "table", "inet", "fr_os"], "stdout": "table inet fr_os {\n}\n"}
+
+
+def _grubenv(**values) -> str:
+    body = "# GRUB Environment Block\n" + "".join(f"{k}={v}\n" for k, v in values.items())
+    return body + "#" * (1024 - len(body))
+
+
+def _slot(state: str | None = None, staged: str = STAGED_KERNEL, files: bool = True, damaged: bool = False,
+          expect: dict | None = None, env: str | None = None) -> dict:
+    """A kernel staged on the persistence partition, its grubenv in
+    `state` (none: an empty block)."""
+    setup = {}
+    if env is not None:
+        setup[f"{SLOT_DIR}/grubenv"] = env
+    elif state is not None:
+        setup[f"{SLOT_DIR}/grubenv"] = _grubenv(fr_os_state=state, fr_os_staged=staged)
+    if files:
+        kernel = VMLINUZ + ("torn" if damaged else "")
+        sums = "".join(f"{hashlib.sha256(t.encode()).hexdigest()}  {n}\n"
+                       for n, t in (("vmlinuz", VMLINUZ), ("initrd.img", INITRD)))
+        setup.update({f"{SLOT_DIR}/staged/vmlinuz": kernel, f"{SLOT_DIR}/staged/initrd.img": INITRD,
+                      f"{SLOT_DIR}/staged/SHA256SUMS": sums})
+        if expect is not None:
+            setup[f"{SLOT_DIR}/staged/expect.json"] = json.dumps(expect, sort_keys=True)
+    return setup
+
+
+def _boot(mode: str | None, persistent: bool = True, **extra) -> dict:
+    """A live boot GRUB started with fr_os.kernel=mode (none: not GRUB's)."""
+    cmdline = LIVE.rstrip("\n") + (f" fr_os.kernel={mode}" if mode else "") + "\n"
+    return _live(cmdline, MEDIUM + (PERSISTENT if persistent else ""), **extra)
+
+
+def _link(name: str, up: bool = True, carrier: bool = True, xdp: bool = False) -> dict:
+    flags = ["BROADCAST", "MULTICAST"] + (["UP"] if up else []) + (["LOWER_UP"] if carrier else [])
+    link = {"ifindex": 2, "ifname": name, "flags": flags, "mtu": 1500}
+    if xdp:
+        link["xdp"] = {"mode": 1, "prog": {"id": 7}}
+    return link
+
+
+def _addrs(name: str, *addresses: str, v6: str | None = None) -> dict:
+    info = [{"family": "inet", "local": a.split("/")[0], "prefixlen": int(a.split("/")[1])} for a in addresses]
+    if v6:
+        info.append({"family": "inet6", "local": v6, "prefixlen": 64})
+    return {"ifname": name, "addr_info": info}
+
+
+def _net(links: list, addrs: list) -> list:
+    return [{"argv": ["ip", "-j", "link", "show"], "stdout": json.dumps(links)},
+            {"argv": ["ip", "-j", "addr", "show"], "stdout": json.dumps(addrs)}]
+
+
+def _active(*units: str) -> list:
+    return [{"argv": ["systemctl", "is-active", "--quiet", "--", u], "rc": 0} for u in units]
+
+
+#: The router XDP_RICH runs: both ports with a link, the LAN's address,
+#: the XDP filter on eth1, the VPN up; the webUI, the helper and Kea.
+HEALTHY = _net([_link("eth0"), _link("eth1", xdp=True), _link("wg0"), _link("lo")],
+               [_addrs("eth0", "192.0.2.10/24"), _addrs("eth1", "10.0.0.1/24", v6="fe80::1"),
+                _addrs("wg0", "10.9.0.1/24")]) + \
+    _active("fr-webui.service", "fr-apply-helper.socket", "kea-dhcp4-server.service")
+#: The same after a kernel that lost eth0's link, the XDP attachment and
+#: the VPN, and Kea.
+BROKEN = _net([_link("eth0", carrier=False), _link("eth1"), _link("wg0", up=False)],
+              [_addrs("eth1", "10.0.0.1/24")]) + _active("fr-webui.service", "fr-apply-helper.socket")
+EXPECT = {"addresses": {"eth1": "10.0.0.1/24"}, "carrier": ["eth0", "eth1"],
+          "services": ["fr-webui.service", "fr-apply-helper.socket", "kea-dhcp4-server.service"],
+          "wireguard": True, "xdp": ["eth1"]}
+APPLIED = {"etc/fr_os/applied-config.yaml": XDP_RICH, "sys/class/net/eth0/": "", "sys/class/net/eth1/": ""}
+FILES = {"boot-files/vmlinuz": VMLINUZ, "boot-files/initrd.img": INITRD}
+NO_WEBUI = {"argv": ["connect", "127.0.0.1", "443"], "rc": 111}
+NO_FIREWALL = {"argv": ["nft", "list", "table"], "rc": 1, "stderr": "Error: No such file or directory\n"}
+
+
+#: A block with lines GRUB would skip, a value with "=" in it, and the
+#: version given twice.
+ODD_BLOCK = (lambda body: body + "#" * (1024 - len(body)))(
+    "# GRUB Environment Block\nnothing here\n#fr_os_state=trial\nfr_os_staged=6.0\nfr_os_state=good\n"
+    "x=a=b\nfr_os_staged=9.9\n\n")
+
+
+def _k(*argv) -> dict:
+    return _c("kernel", *argv)
+
+
+def _stage(*extra, version: str = STAGED_KERNEL) -> dict:
+    return _k("stage", "@ROOT@/boot-files/vmlinuz", "@ROOT@/boot-files/initrd.img", "--version", version, *extra)
+
+
+KERNEL_SESSIONS = {
+    "status, not live": ({"proc/cmdline": "BOOT_IMAGE=/vmlinuz root=/dev/sda2 ro\n", "proc/mounts": ""},
+                         [_k("status")], []),
+    "status, no persistence": (_boot(None, persistent=False), [_k("status")], []),
+    "status, nothing staged": (_boot("image"), [_k("status")], []),
+    "status, empty block": ({**_boot("image"), **_slot(env=_grubenv(), files=False)}, [_k("status")], []),
+    "status, a trial staged": ({**_boot("image"), **_slot("trial")}, [_k("status")], []),
+    "status, on its trial": ({**_boot("trial"), **_slot("trying")}, [_k("status")], []),
+    "status, confirmed": ({**_boot("staged"), **_slot("good")}, [_k("status")], []),
+    "status, booting": ({**_boot("staged"), **_slot("booting")}, [_k("status")], []),
+    "status, failed": ({**_boot("fallback"), **_slot("failed")}, [_k("status")], []),
+    "status, damaged": ({**_boot("image"), **_slot("good", damaged=True)}, [_k("status")], []),
+    "status, files gone": ({**_boot("image"), **_slot("trial", files=False)}, [_k("status")], []),
+    "status, unknown state": ({**_boot("image"), **_slot("sideways")}, [_k("status")], []),
+    "status, no version": ({**_boot(None), **_slot(env=_grubenv(fr_os_state="trial"))}, [_k("status")], []),
+    "status, not a block": ({**_boot("image"), **_slot(env="fr_os_state=trial\n")}, [_k("status")], []),
+    "status, odd lines": ({**_boot("image"), **_slot(env=ODD_BLOCK)}, [_k("status")], []),
+    "stage, no persistence": ({**_boot(None, persistent=False), **FILES}, [_stage()], []),
+    "stage, mount point gone": ({"proc/cmdline": LIVE, "proc/mounts": MEDIUM + PERSISTENT, **FILES},
+                                [_stage()], []),
+    "stage": ({**_boot(None), **FILES, **APPLIED, f"{SLOT_DIR[:-len('/fr_os-boot')]}/rw/": ""},
+              [_stage(), _k("status")], [FREE] + HEALTHY),
+    "stage, nothing applied": ({**_boot(None), **FILES, "run/live/persistence/sdb3/rw/": ""},
+                               [_stage(), _k("status")], [FREE]),
+    "stage, over a failed one": ({**_boot("fallback"), **FILES, **APPLIED, **_slot("failed", damaged=True)},
+                                 [_stage(), _k("status")], [FREE] + BROKEN),
+    "stage, refused": ({**_boot(None), **FILES, "boot-files/empty": "", "boot-files/text": "not a kernel\n",
+                        "run/live/persistence/sdb3/rw/": ""}, [
+        _stage(version="6.1.0 28"), _stage(version="-6.1"), _stage(version="v6"), _stage(version="6" * 65),
+        _k("stage", "@ROOT@/boot-files/text", "@ROOT@/boot-files/initrd.img", "--version", "6.1.0-28-amd64"),
+        _k("stage", "@ROOT@/boot-files/gone", "@ROOT@/boot-files/initrd.img", "--version", "6.1.0-28-amd64"),
+        _k("stage", "@ROOT@/boot-files/vmlinuz", "@ROOT@/boot-files/empty", "--version", "6.1.0-28-amd64"),
+        _k("stage", "@ROOT@/boot-files/vmlinuz", "@ROOT@/boot-files/gone", "--version", "6.1.0-28-amd64"),
+        _k("stage", "@ROOT@/boot-files/vmlinuz", "@ROOT@/boot-files", "--version", "6.1.0-28-amd64")], []),
+    "stage, no room": ({**_boot(None), **FILES, "run/live/persistence/sdb3/rw/": ""}, [_stage()],
+                       [{"argv": ["statvfs"], "stdout": f"{64 * 2**20}\n"}]),
+    "stage, usage": ({**_boot(None), **FILES}, [
+        _k("stage", "@ROOT@/boot-files/vmlinuz", "@ROOT@/boot-files/initrd.img"), _k("stage", "@ROOT@/boot-files/vmlinuz"),
+        _k("stage"), _k(), _k("bogus"), _k("status", "x")], []),
+    "unstage, nothing": (_boot("image"), [_k("unstage")], []),
+    "unstage, no persistence": (_boot(None, persistent=False), [_k("unstage")], []),
+    "unstage": ({**_boot("image"), **_slot("trial")}, [_k("unstage"), _k("status"), _k("unstage")], []),
+    "unstage, block only": ({**_boot("image"), **_slot("good", files=False)}, [_k("unstage")], []),
+    "confirm, no persistence": (_boot("trial", persistent=False), [_k("confirm-boot")], []),
+    "confirm, trial comes up": ({**_boot("trial"), **APPLIED, **_slot("trying", expect=EXPECT)},
+                                [_k("confirm-boot"), _k("status")], [UP] + HEALTHY),
+    "confirm, trial, no record": ({**_boot("trial"), **APPLIED, **_slot("trying")}, [_k("confirm-boot")],
+                                  [UP] + HEALTHY),
+    "confirm, trial, nothing applied": ({**_boot("trial"), **_slot("trying")}, [_k("confirm-boot")], [UP]),
+    "confirm, trial breaks things": ({**_boot("trial"), **APPLIED, **_slot("trying", expect=EXPECT)},
+                                     [_k("confirm-boot"), _k("status")], [UP] + BROKEN),
+    "confirm, trial, no firewall": ({**_boot("trial"), **_slot("trying")}, [_k("confirm-boot")],
+                                    [NO_FIREWALL, NO_WEBUI]),
+    "confirm, trial, comes up late": ({**_boot("trial"), **APPLIED, **_slot("trying", expect=EXPECT)},
+                                      [_k("confirm-boot")],
+                                      [{**UP, "after": 3}, NO_FIREWALL] + HEALTHY),
+    "confirm, trial, a device missing": ({**_boot("trial"), **_slot("trying"),
+                                          "etc/fr_os/applied-config.yaml": XDP_RICH, "sys/class/net/eth0/": ""},
+                                         [_k("confirm-boot")], [UP] + HEALTHY),
+    "confirm, staged comes up": ({**_boot("staged"), **APPLIED, **_slot("booting", expect=EXPECT)},
+                                 [_k("confirm-boot")], [UP] + HEALTHY),
+    "confirm, staged comes up badly": ({**_boot("staged"), **APPLIED, **_slot("booting", expect=EXPECT)},
+                                       [_k("confirm-boot"), _k("status")], [UP] + BROKEN),
+    "confirm, wrong state": ({**_boot("trial"), **_slot("good")}, [_k("confirm-boot")], []),
+    "confirm, staged, wrong state": ({**_boot("staged"), **_slot("trial")}, [_k("confirm-boot")], []),
+    "confirm, fallback": ({**_boot("fallback"), **_slot("failed")}, [_k("confirm-boot")], []),
+    "confirm, image picked over a trial": ({**_boot("image"), **_slot("trying")},
+                                           [_k("confirm-boot"), _k("status")], []),
+    "confirm, image picked over a kept one": ({**_boot("image"), **_slot("booting")}, [_k("confirm-boot")], []),
+    "confirm, image": ({**_boot("image"), **_slot("good")}, [_k("confirm-boot")], []),
+    "confirm, image, nothing staged": (_boot("image"), [_k("confirm-boot")], []),
+    "confirm, not GRUB's": ({**_boot(None), **_slot("trying")}, [_k("confirm-boot")], []),
+    "confirm, an odd value": ({**_boot("trial"), **_slot(env=_grubenv(fr_os_state="trying", fr_os_staged="6.1",
+                                                                      other="a b"))},
+                              [_k("confirm-boot")], [UP]),
+    "confirm, a record that isn't one": ({**_boot("trial"), **APPLIED, **_slot("trying"),
+                                          f"{SLOT_DIR}/staged/expect.json": "[1, 2]"},
+                                         [_k("confirm-boot")], [UP] + HEALTHY),
+}
+
+
+@pytest.mark.parametrize("name", sorted(KERNEL_SESSIONS))
+def test_cli_kernel(system, monkeypatch, name):
+    from frfw import kernel_boot
+
+    root, _ = system
+    setup, requests, table = KERNEL_SESSIONS[name]
+    monkeypatch.setattr(os, "uname", lambda: types.SimpleNamespace(release=RUNNING_KERNEL))
+    found = kernel_boot.persistence_root
+
+    def persistence_root(mounts_text=None):
+        at = found(mounts_text)
+        return None if at is None else root / str(at).lstrip("/")
+
+    def disk_usage(path):
+        proc = _hook_fake[0].run(["statvfs", os.fspath(path)], text=True)
+        free = int(proc.stdout or 0)
+        return types.SimpleNamespace(total=free, used=0, free=free)
+
+    def create_connection(address, timeout=None):
+        proc = _hook_fake[0].run(["connect", address[0], str(address[1]), str(timeout)], text=True)
+        if proc.returncode:
+            raise ConnectionRefusedError(proc.returncode, "Connection refused")
+        return _Response(b"")
+
+    clock = [0.0]
+
+    def sleep(seconds):
+        _hook_fake[0].run(["sleep", str(seconds)], text=True)
+        clock[0] += seconds
+
+    monkeypatch.setattr(kernel_boot, "persistence_root", persistence_root)
+    # `ip -j` through the case's table (bound as a default argument).
+    monkeypatch.setattr(kernel_boot.network_now, "__defaults__", (lambda *a, **k: _hook_fake[0].run(*a, **k),))
+    monkeypatch.setattr(kernel_boot.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(kernel_boot.socket, "create_connection", create_connection)
+    monkeypatch.setattr(kernel_boot.wait_healthy, "__kwdefaults__",
+                        {**kernel_boot.wait_healthy.__kwdefaults__, "clock": lambda: clock[0], "sleep": sleep})
+    _session(system, f"cli/kernel/{name}", setup, requests, table, RANDOM)

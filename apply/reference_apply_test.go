@@ -276,6 +276,36 @@ func replayApply(t *testing.T, c reference.ApplyCase) {
 		network := strings.TrimSpace(r.Stdout)
 		return network, err == nil && r.Code == 0 && network != ""
 	}
+	// The kernel commands' system calls are the recording's
+	// pseudo-calls: ["statvfs", path] (stdout the free bytes),
+	// ["connect", host, port, timeout] (rc 0: it answered) and
+	// ["sleep", seconds], which moves a clock of their own from 0.
+	sys.KernelRelease = func() string { return "6.1.0-26-amd64" }
+	sys.DiskFree = func(path string) (uint64, error) {
+		r, err := f.run(apply.Cmd{Argv: []string{"statvfs", path}})
+		if err != nil {
+			return 0, err
+		}
+		if r.Code != 0 {
+			return 0, syscall.Errno(r.Code)
+		}
+		n, _ := strconv.ParseUint(strings.TrimSpace(r.Stdout), 10, 64)
+		return n, nil
+	}
+	sys.Dial = func(host string, port int, timeout time.Duration) error {
+		r, err := f.run(apply.Cmd{Argv: []string{"connect", host, strconv.Itoa(port),
+			strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64)}})
+		if err == nil && r.Code != 0 {
+			err = syscall.Errno(r.Code)
+		}
+		return err
+	}
+	healthClock := 0.0
+	sys.HealthClock = func() float64 { return healthClock }
+	sys.HealthSleep = func(seconds float64) {
+		f.run(apply.Cmd{Argv: []string{"sleep", config.FloatRepr(seconds)}})
+		healthClock += seconds
+	}
 	sys.Getpass = func(string) (string, error) {
 		if len(f.passwords) == 0 {
 			return "", apply.ErrNoInput

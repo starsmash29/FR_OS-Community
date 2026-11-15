@@ -52,6 +52,7 @@ var root = map[string]string{
 	"fr-persistence-setup.service": "partitions and formats the boot medium's free space and mounts it; no network",
 	"fr-initial-password.service":  "reads the webUI's account file with CAP_DAC_READ_SEARCH alone; no network",
 	"fr-console-ports.service":     "reads root's applied config and writes root's console files, with no capability",
+	"fr-kernel-confirm.service":    "writes the boot environment on the persistence partition, reads the ruleset (SEC-14)",
 }
 
 // broader is what a service holds beyond everywhere, and why: the
@@ -412,6 +413,48 @@ func TestExposure(t *testing.T) {
 		if score > budget {
 			t.Errorf("%s: exposure %.1f, budget %.1f", name, score, budget)
 		}
+	}
+}
+
+// ROADMAP SEC-14: fr-kernel-confirm writes the GRUB environment block
+// on the persistence partition's own root (outside the overlay) and a
+// security alert; it reads the ruleset, and asks systemd -- never the
+// kernel itself -- to reboot after a failed trial. It runs only on a
+// boot FR_OS's GRUB started, after the router has had its chance to
+// come up.
+func TestKernelConfirmUnit(t *testing.T) {
+	const name = "fr-kernel-confirm.service"
+	s := service(t, name)
+	for key, want := range map[string]string{
+		"ExecStart":             "/usr/libexec/fr_os/firewall-cli kernel confirm-boot",
+		"Type":                  "oneshot",
+		"RemainAfterExit":       "yes",
+		"ReadWritePaths":        "-/run/live/persistence -/var/log/fr_os",
+		"CapabilityBoundingSet": "CAP_NET_ADMIN",
+		"IPAddressDeny":         "any",
+		"IPAddressAllow":        "localhost",
+	} {
+		if got := last(s, key); got != want {
+			t.Errorf("%s: %s=%q, want %q", name, key, got, want)
+		}
+	}
+	if got := strings.Fields(last(s, "SystemCallFilter")); !slices.Contains(got, "@reboot") ||
+		!strings.HasPrefix(last(s, "SystemCallFilter"), "~") {
+		t.Errorf("%s: SystemCallFilter=%q does not deny @reboot", name, last(s, "SystemCallFilter"))
+	}
+	unit := section(t, name, "[Unit]")
+	if got := last(unit, "ConditionKernelCommandLine"); got != "fr_os.kernel" {
+		t.Errorf("%s: ConditionKernelCommandLine=%q", name, got)
+	}
+	after := strings.Fields(last(unit, "After"))
+	for _, u := range []string{"fr-accounts.service", "fr-firewall.service", "fr-webui.service",
+		"fr-persistence-setup.service"} {
+		if !slices.Contains(after, u) {
+			t.Errorf("%s: After=%q lacks %s", name, after, u)
+		}
+	}
+	if got := last(section(t, name, "[Install]"), "WantedBy"); got != "multi-user.target" {
+		t.Errorf("%s: WantedBy=%q", name, got)
 	}
 }
 

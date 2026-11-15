@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot the FR_OS ISO in QEMU the way a user would, four times, and check
+"""Boot the FR_OS ISO in QEMU the way a user would, eight times, and check
 that it actually works and remembers what it was told.
 
     sudo installer/qemu-boot-test.py installer/live-build/binary.hybrid.iso
@@ -43,12 +43,21 @@ boxes: the LAN must stay out of its way (ROADMAP NET-12).
    security alert, and the webUI is reachable (ROADMAP SEC-5). The AI
    IDS, started at boot, quarantines a LAN host scanning over IPv6 by
    its MAC (ROADMAP FND-1d).
-FR_OS 1.x's boot test went on to boots 5 to 10 (a staged kernel's
-trials, ROADMAP SEC-14, SEC-23, and the Update screen's kernel card), and
-checked the router's files against its signed release and the
-persistence layer for planted files (SEC-15, SEC-22, SEC-29) and the
-update helper's refusal of an older release (SEC-12). FR_OS 2 has none
-of that yet: those checks come back with phases 4f-3 and 4f-4.
+5. Fifth to eighth boot: a kernel staged on the persistence partition
+   (ROADMAP SEC-14) -- the image's own kernel and initrd, written into the
+   slot from the host the way `firewall-cli kernel stage` writes it. Boot
+   5 tries it, the router confirms it (fr-kernel-confirm, on the serial
+   console), and systemd's hardware watchdog (QEMU's i6300esb) is in use.
+   Boot 6 tries it again with the webUI masked and the LAN port down
+   (ROADMAP SEC-23): the router's own check fails and it reboots into
+   boot 7, the image's own kernel, which raises a security alert. Boot 8
+   tries one whose initrd is broken: the kernel panics and reboots
+   (panic=10), and GRUB has recorded the try.
+FR_OS 1.x's boot test went on to boots 9 and 10 (the Update screen's
+kernel card), and checked the router's files against its signed release
+and the persistence layer for planted files (SEC-15, SEC-22, SEC-29) and
+the update helper's refusal of an older release (SEC-12). FR_OS 2 has
+none of that yet: those checks come back with phases 4f-3b and 4f-4.
 
 With --uefi the VM boots with UEFI firmware (OVMF, the `ovmf` package)
 instead of BIOS; the CI runs the test both ways. Either way the kernel has
@@ -982,6 +991,213 @@ def persistence_partition(disk: Path, *, writable: bool = False):
 
 def command_line(log: str) -> list[str]:
     return log.split("Command line:", 1)[-1].split("\n", 1)[0].split()
+
+
+#: The boot environment block and the staged kernel's slot on the
+#: persistence partition's own root (apply/kernelboot.go): GRUB's
+#: environment block is 1024 bytes, its variables after the header, '#'
+#: up to the end.
+KERNEL_BOOT_DIR = "fr_os-boot"
+GRUBENV_HEADER = "# GRUB Environment Block\n"
+GRUBENV_SIZE = 1024
+#: How long the router gives a staged kernel's boot to come up, in seconds.
+HEALTH_TIMEOUT = 180
+
+
+@contextmanager
+def iso_contents(iso: Path):
+    """The ISO 9660 file system itself (live/vmlinuz, live/initrd.img)."""
+    mountpoint = Path(tempfile.mkdtemp(prefix="fros-iso-"))
+    try:
+        subprocess.run(["mount", "-o", "loop,ro", str(iso), str(mountpoint)], check=True)
+    except subprocess.CalledProcessError:
+        mountpoint.rmdir()
+        raise
+    try:
+        yield mountpoint
+    finally:
+        _unmount(mountpoint)
+
+
+def write_grubenv(path: Path, values: dict[str, str]) -> None:
+    body = GRUBENV_HEADER + "".join(f"{name}={value}\n" for name, value in values.items())
+    tmp = path.with_name(".grubenv.new")
+    tmp.write_bytes((body + "#" * (GRUBENV_SIZE - len(body))).encode())
+    os.replace(tmp, path)
+
+
+def kernel_env(upper: Path) -> dict[str, str]:
+    """The boot environment's variables, none when it is not a block."""
+    try:
+        data = (upper.parent / KERNEL_BOOT_DIR / "grubenv").read_bytes()
+    except OSError:
+        return {}
+    if len(data) != GRUBENV_SIZE or not data.startswith(GRUBENV_HEADER.encode()):
+        return {}
+    values = {}
+    for line in data[len(GRUBENV_HEADER):].decode(errors="replace").split("\n"):
+        if line and not line.startswith("#") and "=" in line:
+            name, value = line.split("=", 1)
+            values[name] = value
+    return values
+
+
+def stage_kernel(disk: Path, iso: Path, version: str, *, broken_initrd: bool = False) -> None:
+    """Stage the image's own kernel on the stick's persistence partition,
+    as `firewall-cli kernel stage` does (ROADMAP SEC-14; its own steps
+    are held to 1.x's by the apply replay) -- or with an initrd that is
+    not one, so the kernel finds no root file system and panics. No
+    expect.json: the trial is checked against what the applied config
+    turns on."""
+    with iso_contents(iso) as contents, persistence_partition(disk, writable=True) as upper:
+        boot_dir = upper.parent / KERNEL_BOOT_DIR
+        boot_dir.mkdir(mode=0o700, exist_ok=True)
+        write_grubenv(boot_dir / "grubenv", {})
+        staging = boot_dir / "staged.new"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(mode=0o700)
+        sums = ""
+        for source, name in ((contents / "live" / "vmlinuz", "vmlinuz"), (contents / "live" / "initrd.img", "initrd.img")):
+            data = b"not an initramfs" * 4096 if broken_initrd and name == "initrd.img" else source.read_bytes()
+            (staging / name).write_bytes(data)
+            sums += f"{hashlib.sha256(data).hexdigest()}  {name}\n"
+        (staging / "SHA256SUMS").write_text(sums)
+        shutil.rmtree(boot_dir / "staged", ignore_errors=True)
+        staging.rename(boot_dir / "staged")
+        write_grubenv(boot_dir / "grubenv", {"fr_os_state": "trial", "fr_os_staged": version})
+        os.sync()
+
+
+#: Masks the webUI for boot 6: a staged kernel's boot then fails its check.
+WEBUI_UNIT = Path("etc") / "systemd" / "system" / "fr-webui.service"
+
+#: Takes the LAN port down on boot 6's trial, as a kernel that broke the
+#: NIC would (ROADMAP SEC-23): the trial fails for that too.
+LINK_DOWN_UNIT = Path("etc") / "systemd" / "system" / "fr-boot-test-link-down.service"
+LINK_DOWN_WANTS = Path("etc") / "systemd" / "system" / "multi-user.target.wants" / "fr-boot-test-link-down.service"
+LINK_DOWN_UNIT_TEXT = """[Unit]
+Description=Boot test: the LAN port down on a kernel trial (ROADMAP SEC-23)
+ConditionKernelCommandLine=fr_os.kernel=trial
+After=fr-firewall.service
+Before=fr-kernel-confirm.service
+
+[Service]
+Type=oneshot
+ExecStart=ip -4 addr flush dev ens4
+ExecStart=ip link set dev ens4 down
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def wait_confirmed(vm: Vm, version: str, timeout: float = HEALTH_TIMEOUT + 60) -> bool:
+    """Until fr-kernel-confirm says, on the serial console, that the
+    router kept the staged kernel. (FR_OS 1.x read the Update screen's
+    kernel card; it comes back with the update-helper, phase 4f-3b.)"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if f"kernel {version} confirmed" in vm.log():
+            return True
+        if vm.proc.poll() is not None:
+            return False
+        time.sleep(3)
+    return False
+
+
+def run_kernel_trials(check, workdir: Path, disk: Path, iso: Path, kvm: bool, uefi, boot_timeout: float) -> None:
+    """Boots 5-8: a kernel staged on the persistence partition, tried and
+    kept, tried and failed by the router's own check, the fallback after
+    it, and one that panics (ROADMAP SEC-14)."""
+    version = re.search(r"Linux version (\S+)", (workdir / "boot4.log").read_text(errors="replace"))
+    version = version.group(1) if version else "0.0.0-fros-test"
+
+    print(f"boot 5: kernel {version}, staged on the persistence partition, on its trial boot")
+    stage_kernel(disk, iso, version)
+    vm = Vm(workdir, disk, 5, kvm, uefi)
+    page = wait_for_webui(webui_opener(), boot_timeout)
+    cmdline = command_line(vm.log())
+    check("fr_os.kernel=trial" in cmdline and "panic=10" in cmdline,
+          "GRUB booted the staged kernel for its trial (fr_os.kernel=trial, panic=10)")
+    check(page is not None, "...and the router came up on it")
+    # Not powered off before the router confirmed it: a trial cut short
+    # is a trial that didn't come up (the next boot falls back).
+    check(page is not None and wait_confirmed(vm, version), "...and fr-kernel-confirm says it is confirmed")
+    check(vm.power_off(), "powered off")
+    vm.kill()
+    with persistence_partition(disk) as upper:
+        confirm = journal(upper, "-b", "-u", "fr-kernel-confirm.service")
+        check(f"kernel {version} confirmed" in confirm and kernel_env(upper).get("fr_os_state") == "good",
+              "the router confirmed it late in the boot: it is the router's kernel now (state 'good')")
+        if "confirmed" not in confirm:
+            print_journal(upper, "fr-kernel-confirm.service", "-b")
+        watchdog = re.search(r".*[Hh]ardware watchdog.*", journal(upper, "-b", "_PID=1"))
+        check(watchdog is not None and "i6300ESB" in watchdog.group(0),
+              "systemd keeps the hardware watchdog fed" + (f": {watchdog.group(0).strip()}" if watchdog else ""))
+
+    print("boot 6: a new trial, with the webUI masked and the LAN port down -- the router doesn't come up")
+    stage_kernel(disk, iso, version)
+    with persistence_partition(disk, writable=True) as upper:
+        unit = upper / WEBUI_UNIT
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        saved = unit.read_bytes() if unit.exists() and not unit.is_symlink() else None
+        unit.unlink(missing_ok=True)
+        unit.symlink_to("/dev/null")
+        # ROADMAP SEC-23: as if the kernel broke the LAN NIC -- on the
+        # trial boot only. Its address goes too: the LAN keeps IPv6 with
+        # the SNI filter on, and dhcpcd, which hands the LAN its
+        # delegated prefix, sets a port it serves back up.
+        (upper / LINK_DOWN_UNIT).write_text(LINK_DOWN_UNIT_TEXT)
+        (upper / LINK_DOWN_WANTS).parent.mkdir(parents=True, exist_ok=True)
+        (upper / LINK_DOWN_WANTS).symlink_to(f"/{LINK_DOWN_UNIT}")
+    vm = Vm(workdir, disk, 6, kvm, uefi)
+    rebooted = vm.wait_exit(boot_timeout + HEALTH_TIMEOUT + 60)
+    vm.kill()
+    check("fr_os.kernel=trial" in command_line(vm.log()), "GRUB booted the staged kernel for its trial")
+    check(rebooted, "the router rebooted by itself when its check failed")
+    with persistence_partition(disk, writable=True) as upper:
+        confirm = journal(upper, "-b", "-u", "fr-kernel-confirm.service")
+        check("failed its trial boot" in confirm and "the webUI does not answer" in confirm,
+              "...because the webUI did not answer")
+        check(f"ens4 is not up with its address {WEBUI_HOST}/24" in confirm,
+              "...and because the LAN port is down, which the applied config needs up (ROADMAP SEC-23)")
+        if "failed its trial" not in confirm or "ens4 is not up" not in confirm:
+            print_journal(upper, "fr-kernel-confirm.service", "-b")
+        check(kernel_env(upper).get("fr_os_state") == "trying", "...leaving the trial unconfirmed ('trying')")
+        unit = upper / WEBUI_UNIT
+        unit.unlink()
+        if saved is not None:
+            unit.write_bytes(saved)
+        (upper / LINK_DOWN_WANTS).unlink()
+        (upper / LINK_DOWN_UNIT).unlink()
+
+    print("boot 7: after the failed trial")
+    vm = Vm(workdir, disk, 7, kvm, uefi)
+    page = wait_for_webui(webui_opener(), boot_timeout)
+    cmdline = command_line(vm.log())
+    check("fr_os.kernel=fallback" in cmdline and "panic=10" not in cmdline,
+          "GRUB booted the image's own kernel instead (fr_os.kernel=fallback)")
+    check(page is not None, "...and the webUI answers")
+    check(vm.power_off(), "powered off")
+    vm.kill()
+    with persistence_partition(disk) as upper:
+        check(kernel_env(upper).get("fr_os_state") == "failed", "the staged kernel is marked 'failed'")
+        audit_log = (upper / "var" / "log" / "fr_os" / "audit.log").read_text()
+        check("failed its trial boot" in audit_log and f"kernel {version} did not come up" in audit_log,
+              "both are security alerts: the failed trial, and the fallback boot")
+
+    print("boot 8: a staged kernel whose initrd is broken")
+    stage_kernel(disk, iso, version, broken_initrd=True)
+    vm = Vm(workdir, disk, 8, kvm, uefi)
+    rebooted = vm.wait_exit(boot_timeout)
+    vm.kill()
+    log = vm.log()
+    check("fr_os.kernel=trial" in command_line(log) and "Kernel panic" in log,
+          "the staged kernel panicked on its trial boot")
+    check(rebooted, "...and rebooted by itself (panic=10)")
+    with persistence_partition(disk) as upper:
+        check(kernel_env(upper).get("fr_os_state") == "trying",
+              "GRUB recorded the try first ('trying'): the next boot is the image's own kernel")
 
 
 def group_id(upper: Path, name: str) -> int | None:
@@ -2269,6 +2485,8 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
               + (f": {listening[-1]}" if listening else ""))
         failed = sorted(set(re.findall(r"Failed to start (\S+)", journal(upper, "-b"))))
         check(not failed, f"no unit failed to start{': ' + ', '.join(failed) if failed else ''}")
+
+    run_kernel_trials(check, workdir, disk, Path(args.iso), kvm, uefi, boot_timeout)
 
     print()
     if check.failures:
