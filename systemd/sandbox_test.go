@@ -53,6 +53,8 @@ var root = map[string]string{
 	"fr-initial-password.service":  "reads the webUI's account file with CAP_DAC_READ_SEARCH alone; no network",
 	"fr-console-ports.service":     "reads root's applied config and writes root's console files, with no capability",
 	"fr-kernel-confirm.service":    "writes the boot environment on the persistence partition, reads the ruleset (SEC-14)",
+	"fr-kernel-prepare.service":    "dpkg installs Debian's kernel package into the persistent root (SEC-14)",
+	"fr-update-helper.service":     "stages a kernel on the persistence partition, with no capability at all (SEC-14)",
 }
 
 // broader is what a service holds beyond everywhere, and why: the
@@ -60,6 +62,9 @@ var root = map[string]string{
 var broader = map[string]map[string]string{
 	// The raw block devices: it partitions and formats the boot medium.
 	"fr-persistence-setup.service": {"PrivateDevices": "no"},
+	// dpkg writes /boot, /usr/lib/modules, /var/lib/dpkg and /etc, and
+	// runs the kernel package's maintainer scripts (as 1.x's unit).
+	"fr-kernel-prepare.service": {"ProtectSystem": "", "ProtectKernelModules": "", "MemoryDenyWriteExecute": ""},
 }
 
 // families is the socket families a service may have beyond AF_UNIX,
@@ -76,7 +81,7 @@ var never = []string{"CAP_SYS_MODULE", "CAP_SYS_PTRACE", "CAP_SYS_BOOT", "CAP_SY
 // exposure is the `systemd-analyze security` budget (0 best, 10 worst).
 var exposure = map[string]float64{"fr-apply-helper.service": 4.5, "fr-apply-revert.service": 4.5,
 	"fr-firewall.service": 4.5, "fr-schedule-check.service": 4.5, "fr-dhcp6.service": 3.0, "fr-webui.service": 2.5,
-	"fr-first-boot.service": 3.0}
+	"fr-first-boot.service": 3.0, "fr-kernel-prepare.service": 3.5}
 
 // service is a unit's [Service]: each key and every value it is given.
 func service(t *testing.T, name string) map[string][]string {
@@ -534,5 +539,53 @@ func TestFirstBootScript(t *testing.T) {
 	}
 	if !strings.Contains(script, "FIREWALL_CLI=${FIREWALL_CLI:-/usr/libexec/fr_os/firewall-cli}") {
 		t.Error("firewall-cli not from /usr/libexec/fr_os")
+	}
+}
+
+// ROADMAP SEC-14, step 3: fr-kernel-prepare installs Debian's newer
+// kernel, on a live router with persistence only, daily and in the
+// background (its timer as 1.x's); it never reboots. The update-helper
+// stages the prepared kernel for the webUI's "Try it" and asks systemd
+// to reboot: root with no capability, the socket the webUI's alone.
+func TestKernelPrepareAndUpdateHelperUnits(t *testing.T) {
+	s := service(t, "fr-kernel-prepare.service")
+	for key, want := range map[string]string{"ExecStart": "/usr/libexec/fr_os/firewall-cli kernel prepare",
+		"Type": "oneshot", "Nice": "10", "IOSchedulingClass": "idle", "TimeoutStartSec": "45min"} {
+		if got := last(s, key); got != want {
+			t.Errorf("fr-kernel-prepare.service: %s=%q, want %q", key, got, want)
+		}
+	}
+	unit := section(t, "fr-kernel-prepare.service", "[Unit]")
+	if got := unit["ConditionKernelCommandLine"]; !slices.Equal(got, []string{"boot=live", "persistence"}) {
+		t.Errorf("fr-kernel-prepare.service: ConditionKernelCommandLine=%q", got)
+	}
+	timer := section(t, "fr-kernel-prepare.timer", "[Timer]")
+	for key, want := range map[string]string{"OnBootSec": "30min", "OnUnitActiveSec": "1d",
+		"RandomizedDelaySec": "1h", "Persistent": "true"} {
+		if got := last(timer, key); got != want {
+			t.Errorf("fr-kernel-prepare.timer: %s=%q, want %q", key, got, want)
+		}
+	}
+	if got := last(section(t, "fr-kernel-prepare.timer", "[Install]"), "WantedBy"); got != "timers.target" {
+		t.Errorf("fr-kernel-prepare.timer: WantedBy=%q", got)
+	}
+
+	s = service(t, "fr-update-helper.service")
+	for key, want := range map[string]string{"ExecStart": "/usr/libexec/fr_os/fr-update-helper",
+		"ReadWritePaths": "-/run/live/persistence -/var/log/fr_os", "CapabilityBoundingSet": "",
+		"IPAddressDeny": "any", "RestrictAddressFamilies": "AF_UNIX AF_NETLINK"} {
+		if got := last(s, key); got != want {
+			t.Errorf("fr-update-helper.service: %s=%q, want %q", key, got, want)
+		}
+	}
+	if !slices.Contains(strings.Fields(last(s, "SystemCallFilter")), "@reboot") {
+		t.Errorf("fr-update-helper.service: SystemCallFilter=%q does not deny @reboot", last(s, "SystemCallFilter"))
+	}
+	socket := section(t, "fr-update-helper.socket", "[Socket]")
+	for key, want := range map[string]string{"ListenStream": "/run/fr_os/update.sock", "SocketMode": "0600",
+		"SocketUser": "fr_os-webui", "SocketGroup": "root"} {
+		if got := last(socket, key); got != want {
+			t.Errorf("fr-update-helper.socket: %s=%q, want %q", key, got, want)
+		}
 	}
 }

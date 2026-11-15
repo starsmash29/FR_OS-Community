@@ -65,6 +65,13 @@ type Paths struct {
 	// LiveRoot is where the mount points /proc/mounts names are: the
 	// persistence filesystem a kernel is staged on (frfw.kernel_boot).
 	LiveRoot string
+	// What preparing a kernel reads and writes (frfw.kernel_update): its
+	// state file and the initrds it makes, where live-boot mounted the
+	// image's root (its kernel's modules are the image's own kernel), the
+	// medium's kernel and initrd, the installed kernels' modules and
+	// /boot, where Debian's kernel packages put their images.
+	KernelUpdateState, KernelInitrds, ImageRoot   string
+	MediumKernel, MediumInitrd, ModulesRoot, Boot string
 }
 
 // DefaultPaths are the router's.
@@ -95,7 +102,10 @@ func DefaultPaths() Paths {
 		Issue:    "/etc/issue", InitialIssue: "/etc/issue.d/fr_os-initial-admin.issue",
 		PortsIssue: "/etc/issue.d/fr_os-ports.issue",
 		Cmdline:    "/proc/cmdline", Mounts: "/proc/mounts", SysBlock: "/sys/class/block", Dev: "/dev",
-		LiveRoot: "/",
+		LiveRoot:          "/",
+		KernelUpdateState: "/etc/fr_os/kernel_update.json", KernelInitrds: "/var/lib/fr_os/kernels",
+		ImageRoot: "/run/live/rootfs", MediumKernel: "/run/live/medium/live/vmlinuz",
+		MediumInitrd: "/run/live/medium/live/initrd.img", ModulesRoot: "/usr/lib/modules", Boot: "/boot",
 	}
 }
 
@@ -192,6 +202,9 @@ type System struct {
 	Dial          func(host string, port int, timeout time.Duration) error
 	HealthClock   func() float64
 	HealthSleep   func(seconds float64)
+	// Decompress runs zstd or xz on an initrd's main archive (nil:
+	// Decompress, the programs themselves).
+	Decompress func(program string, data []byte) ([]byte, error)
 }
 
 // DefaultSystem is the router's, with the bundled application catalog;

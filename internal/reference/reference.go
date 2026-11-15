@@ -192,6 +192,10 @@ type ApplyFile struct {
 	Size int64 `json:"size,omitempty"`
 	// Link is a symbolic link's target (never followed).
 	Link string `json:"link,omitempty"`
+	// Initrd is an initrd the router made, uncompressed (its early
+	// archives as they are, the main one gunzipped), in hex: gzip's
+	// bytes are zlib's own (decisions.md, "phase 4f-3b").
+	Initrd string `json:"initrd,omitempty"`
 }
 
 // ApplyAnswer is what a program says: the first entry whose Argv is a
@@ -204,6 +208,9 @@ type ApplyAnswer struct {
 	Stdout string   `json:"stdout,omitempty"`
 	Stderr string   `json:"stderr,omitempty"`
 	Error  string   `json:"error,omitempty"`
+	// Writes are files the program leaves under the directory after its
+	// "-b" (depmod's base directory), by path.
+	Writes map[string]string `json:"writes,omitempty"`
 }
 
 // ApplyCall is one program 1.x ran: its argv, its input (a string, or
@@ -251,6 +258,9 @@ type ApplyCase struct {
 	// finds (nil: none at all); useradd, groupadd, usermod and gpasswd
 	// change them, and a chown is recorded as a call.
 	Accounts *ApplyAccounts `json:"accounts,omitempty"`
+	// SetupMtime is when every setup file last changed (0: when the
+	// replay wrote it).
+	SetupMtime float64 `json:"setup_mtime,omitempty"`
 }
 
 // ApplyAccounts are users by uid and groups by gid and members.

@@ -234,6 +234,32 @@ prints it instead; `--watch` keeps it current on every link change
 
 See [Installation](../getting-started/installation.md#persistence).
 
+## Kernel
+
+A live router with persistence can take Debian's kernel fixes without a
+new image: a kernel is staged on the persistence partition, tried once
+at the next reboot, and kept only if the router comes up on it with the
+firewall, its ports and the console working; otherwise the image's own
+kernel boots again.
+
+```console
+# firewall-cli kernel status
+# firewall-cli kernel prepare [--version RELEASE] [--config CONFIG]
+# firewall-cli kernel try [--no-reboot]
+# firewall-cli kernel stage KERNEL INITRD --version RELEASE
+# firewall-cli kernel unstage
+```
+
+| Command | Effect |
+| --- | --- |
+| `status` | The running kernel, the staged one and its state, and the staged files' SHA-256 digests. |
+| `prepare` | What `fr-kernel-prepare.timer` runs daily while `update.kernel_updates` is on (the default): if Debian's `linux-image-amd64` points at a newer kernel than the router has, installs it with apt from the Debian archive and makes its initrd from the image's own. It never stages or reboots. `--version` prepares that kernel instead, whatever the setting. |
+| `try` | Stages the prepared kernel and reboots into its trial; `--no-reboot` leaves the trial for the next reboot. **Update → Try it** does the same. |
+| `stage`, `unstage` | Stage a kernel and initrd of your own, or go back to the image's kernel at the next reboot. Neither reboots. |
+
+`kernel confirm-boot` is the boot-time check `fr-kernel-confirm.service`
+runs; it is not for the console.
+
 ## Not in this version
 
 These appear in some messages but are not commands of this version yet:
@@ -241,4 +267,4 @@ confirming or reverting a held apply from the command line (use the
 console's banner), moving the management addresses from the command line
 (use **System → webUI address**), creating the metrics token from the
 command line (use **System → Multi-site monitoring**), and installing
-updates (the update-helper arrives with a later 2.0 phase).
+release updates (a later 2.0 phase).

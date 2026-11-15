@@ -1,0 +1,18 @@
+[Unit]
+Description=FR_OS privileged update-helper socket
+# SocketUser= needs the account to exist.
+Wants=fr-accounts.service
+After=fr-accounts.service
+
+[Socket]
+ExecStartPre=/bin/mkdir -p /run/fr_os
+ListenStream=/run/fr_os/update.sock
+# Only the webUI's account (and root) can connect: what the helper does
+# reboots the router. helper.UpdateServer checks the peer uid again.
+SocketMode=0600
+SocketUser=fr_os-webui
+SocketGroup=root
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

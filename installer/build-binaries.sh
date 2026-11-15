@@ -21,7 +21,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAGE="${1:?usage: build-binaries.sh STAGE_DIR}"
 RUST_TARGET=x86_64-unknown-linux-musl
-GO_BINARIES=(firewall-cli fr-apply-helper fr-apply-revert fr-webui)
+GO_BINARIES=(firewall-cli fr-apply-helper fr-apply-revert fr-update-helper fr-webui)
 RUST_BINARIES=(fr-ai-ids fr-appid fr-iot-scan fr-tls-fp fr-xdp fr-xdp-sni-logger)
 
 rm -rf "$STAGE"

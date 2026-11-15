@@ -900,3 +900,49 @@ passes makes its 91 tries in the recording, and in no time).
   `fr-kernel-confirm`'s line on the serial console instead of the
   Update screen's kernel card, which reads the update-helper (phase
   4f-3b). Boots 9 and 10 come with 4f-3b.
+
+## 2026-11-15: a kernel prepared, then tried (phase 4f-3b)
+
+`firewall-cli kernel prepare|try`, `fr-kernel-prepare.service` and its
+timer, and the update-helper's kernel commands (`kernel_status`,
+`kernel_check`, `kernel_try`, `kernel_cancel`, `ping`), held to 1.x's
+`frfw.kernel_update`, `frfw.cli` and `frfw.helper.update_server`
+(ROADMAP SEC-14, step 3). `reference/test_fros_apply_cases.py` records
+them as `cli/kernel/...` sessions too: apt, dpkg and depmod answer from
+the table, and an update-helper request is a step `{"update": request}`,
+sent to 1.x's `_handle_request` and in 2.x to `helper.UpdateServer`.
+The image's initrd in the setup is a small one the recording makes
+(newc archives, gzip'd, with live-boot and one kernel's modules); the
+new kernel's modules are setup files under `usr/lib/modules`.
+
+- **No recorded case changes.** Every message, alert, exit status, file
+  left and reply is 1.x's; the webUI's kernel buttons (`update/kernel`)
+  answer as 1.x's, so they no longer answer 501.
+- **The initrd the router makes is compared uncompressed**: its early
+  archives as they are and its main archive gunzipped (`"initrd"` in
+  the recorded file, `apply.SplitInitrd` on 2.x's). gzip's bytes are
+  zlib's own; Go's compress/gzip writes a different stream for the same
+  archive, which the kernel unpacks the same.
+- **The setup's files all carry one mtime** (`setup_mtime`): the
+  initrd's new entries take the image initrd's, so the recording and
+  the replay set it alike.
+- **A table answer may leave files** (`"writes"`, under the directory
+  after its `-b`): depmod's `modules.dep`, which the checks of the
+  initrd read back.
+- **xz and zstd are the programs**, as 1.x's zstd already was: Go's
+  standard library has no reader for either. An initrd's archive is
+  read and decompressed up to 1 GiB (1.x: no bound).
+- **1.x lets two errors through**: apt's timeout (`TimeoutExpired`) and
+  a torn archive's `ValueError` (a field of its header cut short), and a
+  failed `systemctl start` behind "Check now" (`CalledProcessError`).
+  The CLI fails (exit 1) and the update-helper sends no reply, as
+  there.
+- **`apply` and `rollback` are unknown commands** to the update-helper
+  until the signed release update (phase 4f-4); the webUI's install and
+  rollback buttons still answer 501. The update-helper's other
+  requests are read as the apply-helper's are ("the helper's
+  requests").
+- **The boot test's boots 9 and 10 come back**, as 1.x's: "Check now"
+  with fr-kernel-prepare pointed at the running kernel, "Try it", and
+  the trial on the router-built initrd, confirmed on the Update screen
+  against what worked before it (SEC-23).

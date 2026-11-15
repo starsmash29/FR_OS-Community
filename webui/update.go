@@ -14,13 +14,13 @@ import (
 	"github.com/starsmash29/fr_os-community/config"
 )
 
-// The update screen (1.x's routes/update.py), read-only in phase 3: the
-// installed version, what the release check finds, what the periodic
-// check left (G10/J3), the kernel's status from the update-helper
-// (ROADMAP SEC-14), and the two settings that are config saves.
-// Installing, rolling back and the kernel trial go through the
-// update-helper, which FR_OS 2 ports in a later phase; until then
-// those POSTs answer 501 (decisions.md, 3c-1).
+// The update screen (1.x's routes/update.py): the installed version,
+// what the release check finds, what the periodic check left (G10/J3),
+// the kernel's status and its buttons, through the update-helper
+// (ROADMAP SEC-14, phase 4f-3b), and the two settings that are config
+// saves. Installing and rolling back a signed release go through the
+// update-helper too, which takes them in phase 4f-4; until then those
+// POSTs answer 501 (decisions.md, 3c-1).
 
 // defaultUpdateRepo is where FR_OS 2's releases are looked for unless
 // update.repo says otherwise (1.x's frfw.update.DEFAULT_REPO names
@@ -382,4 +382,46 @@ func (s *Server) saveAutoSecurity(q *request) (*answer, error) {
 func (s *Server) saveKernelUpdates(q *request) (*answer, error) {
 	return s.saveUpdateSetting(q, "kernel_updates",
 		"Debian's kernel fixes are fetched daily, ready to try", "Kernel updates are off")
+}
+
+// kernelAction is _kernel_action: one of the Update screen's kernel
+// buttons, sent to the update-helper (ROADMAP SEC-14), and back to the
+// screen with what it answered.
+func (s *Server) kernelAction(cmd, failed string) (*answer, error) {
+	result, err := s.helper.Kernel(cmd)
+	if err != nil {
+		var he *HelperError
+		text := err.Error()
+		if errors.As(err, &he) {
+			text = he.Msg
+		}
+		return errorRedirect("/update", failed+": "+text), nil
+	}
+	if config.Truthy(field(result, "ok")) {
+		if m := field(result, "message"); config.Truthy(m) {
+			return successRedirect("/update", pyStr(m)), nil
+		}
+		return successRedirect("/update", "Done"), nil
+	}
+	if m := field(result, "message"); config.Truthy(m) {
+		return errorRedirect("/update", pyStr(m)), nil
+	}
+	return errorRedirect("/update", failed), nil
+}
+
+// kernelCheck looks for Debian's newer kernel now instead of at the
+// daily check.
+func (s *Server) kernelCheck(q *request) (*answer, error) {
+	return s.kernelAction("kernel_check", "Could not start the check")
+}
+
+// kernelTry stages the kernel that is ready and reboots into its trial
+// (ROADMAP SEC-14): an admin's decision only (a viewer is refused every
+// POST). The router keeps it only if it comes up on it.
+func (s *Server) kernelTry(q *request) (*answer, error) {
+	return s.kernelAction("kernel_try", "Could not start the trial")
+}
+
+func (s *Server) kernelCancel(q *request) (*answer, error) {
+	return s.kernelAction("kernel_cancel", "Could not remove the staged kernel")
 }

@@ -54,6 +54,8 @@ const cliUsage = `usage: firewall-cli COMMAND ...
                                     keep a live-booted router's state across reboots
   kernel status | stage KERNEL INITRD --version RELEASE | unstage | confirm-boot
                                     a kernel staged on the persistence partition, tried once
+  kernel prepare [--version RELEASE] [--config CONFIG] | try [--no-reboot]
+                                    Debian's newer kernel made ready to try; try it (reboots)
 
 CONFIG defaults to /etc/fr_os/config.yaml.
 `
@@ -99,6 +101,8 @@ var cliCommands = []cliCommand{
 		positional: []string{"kernel", "initrd"}},
 	{name: "kernel unstage"},
 	{name: "kernel confirm-boot"},
+	{name: "kernel prepare", values: []string{"--version", "--config"}},
+	{name: "kernel try", flags: []string{"--no-reboot"}},
 }
 
 type cliArgs struct {

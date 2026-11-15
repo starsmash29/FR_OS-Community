@@ -184,6 +184,12 @@ func (h helper) IDSQuarantineStatus() (*config.Map, error) {
 func (h helper) KernelStatus() (*config.Map, error) {
 	return h.send(h.env.Paths.UpdateSocket(), cmdMap("cmd", "kernel_status"), 60)
 }
+
+// Kernel is the update-helper's kernel_check, kernel_try or
+// kernel_cancel.
+func (h helper) Kernel(cmd string) (*config.Map, error) {
+	return h.send(h.env.Paths.UpdateSocket(), cmdMap("cmd", cmd), 60)
+}
 func (h helper) ListeningSockets() (*config.Map, error) {
 	return h.apply(cmdMap("cmd", "listening_sockets"), 10)
 }
