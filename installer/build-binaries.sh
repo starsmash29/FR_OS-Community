@@ -9,7 +9,8 @@
 #   bpf/      the XDP SNI filter's program (crates/fros-xdp-ebpf, its
 #             pinned nightly and bpf-linker 0.13.0; AGENTS.md, "Toolchains")
 #   scripts/  fr-first-boot.sh and install-system-integration.sh
-#   systemd/  the units and the journald and watchdog drop-ins
+#   systemd/  the units, the journald and watchdog drop-ins and the
+#             kernel's IPv6 settings (sysctl.d)
 #
 # Run as the user who has the toolchains (go.mod's, rust-toolchain.toml's
 # with the x86_64-unknown-linux-musl target, the eBPF crate's nightly),

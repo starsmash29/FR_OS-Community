@@ -37,6 +37,10 @@ echo wireguard > /etc/modules-load.d/fr_os-wireguard.conf
 echo nf_log_syslog > /etc/modules-load.d/fr_os-logging.conf
 install -D -m 0644 "$STAGE/systemd/journald-fr_os.conf" /etc/systemd/journald.conf.d/fr_os.conf
 
+# The kernel takes no RA and makes no SLAAC address of its own, from
+# boot on: dhcpcd reads the WAN's RA (render.Sysctls, decisions.md).
+install -D -m 0644 "$STAGE/systemd/sysctl-fr_os-ipv6.conf" /etc/sysctl.d/50-fr_os-ipv6.conf
+
 # The hardware watchdog, when the machine has one: a hang resets the
 # machine (ROADMAP SEC-14).
 install -D -m 0644 "$STAGE/systemd/watchdog-fr_os.conf" /etc/systemd/system.conf.d/fr_os-watchdog.conf

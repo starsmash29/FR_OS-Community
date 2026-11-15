@@ -2565,6 +2565,15 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
             # work out of the box.
             check(any((root / "lib" / "firmware" / "rtl_nic").glob("rtl8168*")),
                   "the image carries the Realtek NIC firmware (lib/firmware/rtl_nic)")
+            # The kernel takes no RA and makes no SLAAC address of its
+            # own, on any interface, from boot on: dhcpcd reads the WAN's
+            # RA (boot 3's RFC 7217 check; decisions.md, "the kernel's RA
+            # settings at boot").
+            settings = root / "etc" / "sysctl.d" / "50-fr_os-ipv6.conf"
+            text = settings.read_text() if settings.exists() else ""
+            check(all(f"net.ipv6.conf.*.{key} = 0" in text
+                      for key in ("accept_ra", "accept_redirects", "accept_source_route", "autoconf")),
+                  "the image turns the kernel's own RA handling and SLAAC off from boot on (sysctl.d)")
         check(not journal(upper, "-u", "nftables.service").strip(), "...and it never ran, on any boot")
         audit_log = upper / "var" / "log" / "fr_os" / "audit.log"
         check(audit_log.exists() and audit_log.stat().st_uid == 0 and audit_log.stat().st_mode & 0o777 == 0o640
