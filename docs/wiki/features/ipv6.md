@@ -23,6 +23,11 @@ That is usually all it takes.
 - it sends no host name and runs no hook script, so nothing the provider
   sends is written to the router's own files.
 
+The kernel never handles router advertisements itself, and never makes a
+SLAAC address of its own. From boot on, `/etc/sysctl.d/50-fr_os-ipv6.conf`
+turns `accept_ra` and `autoconf` off on every interface, so only dhcpcd's
+stable addresses appear on the WAN.
+
 `ipv6.enabled` needs an internet-facing interface: a zone NAT masquerades
 out of, or a zone named `wan`.
 

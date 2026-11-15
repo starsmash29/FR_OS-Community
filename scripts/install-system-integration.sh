@@ -61,6 +61,12 @@ if [[ -f "$REPO_ROOT/go.mod" && -f "$REPO_ROOT/systemd/journald-fr_os.conf" ]]; 
     install -D -m 0644 "$REPO_ROOT/systemd/journald-fr_os.conf" /etc/systemd/journald.conf.d/fr_os.conf
 fi
 
+if [[ -f "$REPO_ROOT/go.mod" && -f "$REPO_ROOT/systemd/sysctl-fr_os-ipv6.conf" ]]; then
+    echo "==> No RA or SLAAC taken by the kernel itself, from boot on (dhcpcd reads the WAN's RA)"
+    install -D -m 0644 "$REPO_ROOT/systemd/sysctl-fr_os-ipv6.conf" /etc/sysctl.d/50-fr_os-ipv6.conf
+    /usr/lib/systemd/systemd-sysctl /etc/sysctl.d/50-fr_os-ipv6.conf
+fi
+
 if [[ -f "$REPO_ROOT/go.mod" && -f "$REPO_ROOT/systemd/watchdog-fr_os.conf" ]]; then
     echo "==> Hardware watchdog, when the machine has one (ROADMAP SEC-14)"
     install -D -m 0644 "$REPO_ROOT/systemd/watchdog-fr_os.conf" /etc/systemd/system.conf.d/fr_os-watchdog.conf

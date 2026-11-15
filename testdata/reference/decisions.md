@@ -946,3 +946,24 @@ new kernel's modules are setup files under `usr/lib/modules`.
   with fr-kernel-prepare pointed at the running kernel, "Try it", and
   the trial on the router-built initrd, confirmed on the Update screen
   against what worked before it (SEC-23).
+
+## 2026-11-15: the kernel's RA settings at boot
+
+No recorded case changes: the change is the image's, not the apply's.
+
+- **The kernel takes no Router Advertisement and makes no SLAAC
+  address of its own from boot on**: `systemd/sysctl-fr_os-ipv6.conf`,
+  installed as `/etc/sysctl.d/50-fr_os-ipv6.conf`, sets `accept_ra`,
+  `accept_redirects`, `accept_source_route` and `autoconf` to 0 on every
+  interface. systemd's udev rule applies the same values to each
+  interface added later. 1.x's image leaves the kernel's defaults
+  (`accept_ra=1`, `autoconf=1`) until an apply's IPv6 step writes 0.
+  That step runs after the ruleset, which already lets the provider's
+  RA in on the WAN. An RA arriving between the two left the WAN with an
+  EUI-64 address the kernel made, and writing `autoconf=0` afterwards
+  doesn't remove it. The boot test's RFC 7217 check in boot 3 caught
+  this once (PR #42's first run). The apply keeps 1.x's order and
+  writes: they now only write what is already there.
+  `systemd/sysctl_test.go` holds the file to the settings
+  `render.Sysctls` turns off. The boot test checks that the image
+  carries the file.
