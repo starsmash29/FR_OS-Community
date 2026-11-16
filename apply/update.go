@@ -104,12 +104,30 @@ type Updater struct {
 	RestartWebUI func() error
 }
 
-// NewUpdater is the router's, for repo.
+// NewUpdater is the router's, for repo. The installed version is read
+// when the updater is made, from the release /usr/libexec/fr_os points
+// at (InstalledVersion), not taken from the version this program was
+// built as: the update-helper keeps running across an update it
+// installed, and a version compiled into it would let a second request
+// install a release older than the one it just switched to (SEC-12;
+// review v2.0.0-beta.1 R2).
 func NewUpdater(sys *System, repo string) *Updater {
 	if repo == "" {
 		repo = DefaultUpdateRepo
 	}
-	return &Updater{Sys: sys, Repo: repo, Installed: version.Version}
+	return &Updater{Sys: sys, Repo: repo, Installed: InstalledVersion(sys.Paths)}
+}
+
+// InstalledVersion is the version of the release /usr/libexec/fr_os
+// points at: its VERSION file, which the image and every install write.
+// A router without one (an image from before versioned directories) is
+// the version this program was built as.
+func InstalledVersion(p Paths) string {
+	data, err := readLimited(filepath.Join(p.Libexec, "VERSION"), 256)
+	if err != nil {
+		return version.Version
+	}
+	return strings.TrimSuffix(string(data), "\n")
 }
 
 // DownloadError is a download that failed: urllib's HTTPError text for an
@@ -670,6 +688,12 @@ func checkReleaseLayout(top, target string) error {
 func (u *Updater) installRelease(top, target string) error {
 	p := u.Sys.Paths
 	plain := strings.TrimPrefix(target, "v")
+	old, _ := os.Readlink(p.Libexec)
+	if filepath.Base(old) == plain {
+		// Never replace the directory in use: the programs running now
+		// run from it (review v2.0.0-beta.1 R2).
+		return updateErrorf("refusing to replace %s: it is the release in use", plain)
+	}
 	if err := os.MkdirAll(p.LibexecReleases, 0o755); err != nil {
 		return err
 	}
@@ -700,12 +724,6 @@ func (u *Updater) installRelease(top, target string) error {
 	}
 	if err := installFile(filepath.Join(top, "VERSION"), filepath.Join(staged, "VERSION"), 0o644); err != nil {
 		return err
-	}
-	old, _ := os.Readlink(p.Libexec)
-	if filepath.Base(old) == plain {
-		// Never replace the directory in use (a release reinstalled after
-		// its rollback target): switch away from it is all there is.
-		old = ""
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return err

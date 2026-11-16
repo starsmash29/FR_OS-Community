@@ -123,9 +123,14 @@ go run ./release/reviewgate 2.0.0
      job packed. The ISO is then built -- with no access to the key --
      from exactly that tarball, carries it with its signature under
      `/opt/fr_os/releases/<VERSION>/`, and is boot-tested.
-   - `publish` signs the published `SHA256SUMS` of the ISO and the
+   - `publish` first checks that the tarball the image job hands it is,
+     byte for byte, the one `sign-stage` signed (verified with the keys
+     this commit ships): the image job runs apt, live-build and QEMU as
+     root, and must not be able to have the key sign a tarball of its
+     own. It then signs the published `SHA256SUMS` of the ISO and the
      tarball and uploads the four assets to the release; it is the only
-     job that may write to the repository.
+     job that may write to the repository. The ISO itself has no earlier
+     signature to compare with: its integrity rests on the image job.
 
    Both signatures go through `scripts/sign-sums.sh`, which checks that
    the signing key's public half is one this commit ships and that the
