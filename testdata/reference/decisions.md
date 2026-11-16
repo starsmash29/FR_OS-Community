@@ -967,3 +967,45 @@ No recorded case changes: the change is the image's, not the apply's.
   `systemd/sysctl_test.go` holds the file to the settings
   `render.Sysctls` turns off. The boot test checks that the image
   carries the file.
+
+## 2026-11-16: a signed release, built (phase 4f-4a)
+
+`release.jsonl` is new: `reference/test_fros_release_cases.py` has 1.x's
+`frfw.release_signing` check signatures with keys of every shape (made
+from fixed seeds for these cases only), signatures damaged at random,
+the checksum `SHA256SUMS` lists for a name in every text shape, and
+whole releases. `release` (2.x) gives the same answers, with these
+differences:
+
+- **A release is the programs, not the source.** 1.x publishes a
+  `git archive` of the tag (`frfw-<version>.tar.gz`) and its updater
+  installs it with pip. A router running 2.x has no compiler and no
+  Python, so its release tarball is what `installer/build-binaries.sh`
+  stages (`fr_os-<version>-amd64.tar.gz`, `installer/package-release.sh`):
+  the Go and Rust programs, the XDP object, the scripts and the units,
+  the same bytes for the same commit. The image is built from exactly
+  that tarball and keeps it, with its `SHA256SUMS` and signature, under
+  `/opt/fr_os/releases/<version>/`, as 1.x's image keeps its source.
+- **The trusted keys are compiled in** (`release/keys/`, `go:embed`),
+  where 1.x reads `frfw/release_keys/*.pem` from its installed package.
+  The error for a build with no key names `release/keys/`; the replay
+  maps 1.x's directory to it.
+- **Ed25519 is checked with Go's `crypto/ed25519`**, not the `openssl`
+  program: a key file is read as `openssl pkeyutl -pubin -inkey` reads
+  it (its first PEM block, text before it skipped, or the whole file as
+  DER; a private key or a key of another kind matches nothing), and an
+  empty `SHA256SUMS` verifies against no key, since openssl can't check
+  a signature over nothing. 1.x's "openssl not found" can't happen.
+- **A signed `SHA256SUMS` that isn't UTF-8** is `release.ErrNotText`
+  where 1.x lets `UnicodeDecodeError` through.
+- **The version is the `VERSION` file**, stamped into the Go programs as
+  `version.Version` (1.x: `frfw.__version__`); `firewall-cli --version`
+  prints it with its codename, as 1.x's argparse does.
+- **The release workflow is 1.x's**, with the jobs renamed to what they
+  build (`stage`, `sign-stage`, `image`, `publish`): the gate (tag,
+  commit, `VERSION`, the J2 review record, `release/reviewgate` held to
+  1.x's `scripts/check_release_review.py` and its tests), the key only in
+  the two jobs of the `release` environment and only for a release,
+  `scripts/sign-sums.sh` refusing a key this commit doesn't ship and
+  checking the signature as a router will (`go run ./release/verify`),
+  and every action pinned to a commit.

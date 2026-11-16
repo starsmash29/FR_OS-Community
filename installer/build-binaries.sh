@@ -25,14 +25,24 @@ RUST_TARGET=x86_64-unknown-linux-musl
 GO_BINARIES=(firewall-cli fr-apply-helper fr-apply-revert fr-update-helper fr-webui)
 RUST_BINARIES=(fr-ai-ids fr-appid fr-iot-scan fr-tls-fp fr-xdp fr-xdp-sni-logger)
 
+# The release this build is (version.Version): the repository's VERSION
+# file, X.Y.Z.
+VERSION="$(cat "$REPO_ROOT/VERSION")"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: VERSION is not X.Y.Z: $VERSION" >&2
+    exit 1
+fi
+
 rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/bpf" "$STAGE/scripts" "$STAGE/systemd"
 STAGE="$(cd "$STAGE" && pwd)"
 cd "$REPO_ROOT"
 
-echo "==> Go binaries (CGO_ENABLED=0)"
+echo "==> Go binaries (CGO_ENABLED=0), FR_OS $VERSION"
 for name in "${GO_BINARIES[@]}"; do
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid=" -o "$STAGE/bin/$name" "./cmd/$name"
+    CGO_ENABLED=0 go build -trimpath \
+        -ldflags="-s -w -buildid= -X github.com/starsmash29/fr_os-community/version.Version=$VERSION" \
+        -o "$STAGE/bin/$name" "./cmd/$name"
 done
 
 echo "==> Rust binaries ($RUST_TARGET, static)"

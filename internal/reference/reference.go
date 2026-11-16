@@ -474,3 +474,27 @@ type NetdetectCase struct {
 
 // NetdetectCases loads testdata/reference/netdetect.jsonl.
 func NetdetectCases() ([]NetdetectCase, error) { return load[NetdetectCase]("netdetect.jsonl") }
+
+// ReleaseCase is one of 1.x's frfw.release_signing answers
+// (release.jsonl): op "signature" is verify_signature over data with
+// keys (each file's bytes, hex; named k0.pem, k1.pem, ...), op
+// "expected" expected_sha256 of text for name, op "release"
+// verify_release of a tarball. Key is the signing key's file name,
+// Error a SignatureError's text, Raised another exception's type.
+type ReleaseCase struct {
+	ID        string   `json:"id"`
+	Op        string   `json:"op"`
+	Keys      []string `json:"keys"`
+	Data      string   `json:"data"`
+	Signature string   `json:"signature"`
+	Tarball   string   `json:"tarball"`
+	Text      string   `json:"text"`
+	Name      string   `json:"name"`
+	Digest    *string  `json:"digest"`
+	Key       *string  `json:"key"`
+	Error     *string  `json:"error"`
+	Raised    *string  `json:"raised"`
+}
+
+// ReleaseCases loads testdata/reference/release.jsonl.
+func ReleaseCases() ([]ReleaseCase, error) { return load[ReleaseCase]("release.jsonl") }

@@ -21,6 +21,7 @@ installer/live-build/*.contents
 installer/live-build/chroot.*
 installer/live-build/.lock
 installer/live-build/config/includes.chroot/opt/fr_os-stage/
+installer/live-build/config/includes.chroot/opt/fr_os/releases/
 installer/live-build/config/environment.chroot
 installer/live-build/config/binary
 installer/live-build/config/bootstrap

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/starsmash29/fr_os-community/config"
+	"github.com/starsmash29/fr_os-community/version"
 )
 
 // The update screen (1.x's routes/update.py): the installed version,
@@ -34,33 +35,13 @@ const updateFetchTimeout = 10.0
 // notes is a few KiB.
 const maxReleaseBytes = 1 << 20
 
-// codenamesByMajor are the release codenames (1.x's frfw._CODENAMES_BY_MAJOR).
-var codenamesByMajor = map[string]string{"0": "Ice Breaker", "1": "Idun", "2": "Ivar", "3": "Inari", "4": "Ingemar"}
-
 var releaseVersionRE = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
-// codenameFor is frfw.codename_for: the codename of a release version,
-// "" for an unparsable one or a major version without a name. 0.1.0 up
-// to 1.0.0 included is Ice Breaker.
-func codenameFor(version string) string {
-	m := releaseVersionRE.FindStringSubmatch(config.PyStrip(version))
-	if m == nil {
-		return ""
-	}
-	major, minor, patch := trimZeros(m[1]), trimZeros(m[2]), trimZeros(m[3])
-	if major == "1" && minor == "0" && patch == "0" {
-		return codenamesByMajor["0"]
-	}
-	return codenamesByMajor[major]
-}
+// codenameFor is frfw.codename_for (version.Codename).
+func codenameFor(v string) string { return version.Codename(v) }
 
 // withCodename is the templates' with_codename filter.
-func withCodename(version string) string {
-	if name := codenameFor(version); name != "" {
-		return version + " “" + name + "”"
-	}
-	return version
-}
+func withCodename(v string) string { return version.WithCodename(v) }
 
 func trimZeros(digits string) string {
 	digits = strings.TrimLeft(digits, "0")

@@ -20,6 +20,9 @@ func Str(v Value) string { return pyStr(v) }
 // PyStrip is str.strip().
 func PyStrip(s string) string { return pyStrip(s) }
 
+// PyLstrip is str.lstrip(): whitespace off the start only.
+func PyLstrip(s string) string { return strings.TrimLeftFunc(s, pyIsSpace) }
+
 // PyLower is str.lower().
 func PyLower(s string) string { return pyLower(s) }
 
