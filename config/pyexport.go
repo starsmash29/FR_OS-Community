@@ -230,3 +230,7 @@ func PySplitlinesKeepends(s string) []string {
 	}
 	return lines
 }
+
+// ValidateGithubRepo is frfw.validate.github_repo's check: "" for an
+// OWNER/NAME, else its message.
+func ValidateGithubRepo(s string) string { return validateGithubRepo(s) }

@@ -1853,6 +1853,33 @@ SESSIONS = {
          {"cmd": "kernel_cancel", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True}},
          {"cmd": "kernel_cancel", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "message": ""}},
          {"cmd": "kernel_try", "socket": UPDATE_SOCKET, "reply": {"ok": True, "message": "viewer"}}]),
+    # Installing a release and rolling back (phase 4f-4b): the
+    # update-helper verifies and installs; the screen says what it
+    # answered.
+    "update/install": ({"accounts": [ADMIN, VIEWER]}, [
+        *_login(), {"post": "/update/apply", "form": {"version": "2.0.1"}},
+        {"post": "/update/apply", "form": {"version": "1.0.0"}}, {"post": "/update/apply", "form": {"version": "x"}},
+        {"post": "/update/apply", "form": {"version": "2.0.2"}}, {"post": "/update/apply", "form": {}},
+        {"post": "/update/apply", "form": {"version": ""}},
+        {"post": "/update/rollback", "form": {}}, {"post": "/update/rollback", "form": {}},
+        {"post": "/update/rollback", "form": {}}, {"post": "/update/rollback", "form": {}},
+        {"post": "/update/apply", "form": {"version": "2.0.1"}, "csrf": "wrong"},
+        {"post": "/logout"}, *_login(VIEWER), {"post": "/update/apply", "form": {"version": "2.0.1"}},
+        {"post": "/update/rollback", "form": {}}],
+        [{"cmd": "apply", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "message": "Updated to 2.0.1"}},
+         {"cmd": "apply", "socket": UPDATE_SOCKET, "times": 1, "reply": {
+             "ok": False, "message": "refusing to install 1.0.0: it is older than the installed <b>"}},
+         {"cmd": "apply", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": False}},
+         {"cmd": "apply", "socket": UPDATE_SOCKET, "times": 1, "error": True},
+         {"cmd": "apply", "socket": UPDATE_SOCKET, "times": 1, "reply": {
+             "ok": False, "message": "'version' must be a non-empty string"}},
+         {"cmd": "rollback", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True, "message": "Rolled back to 2.0.0"}},
+         {"cmd": "rollback", "socket": UPDATE_SOCKET, "times": 1, "reply": {"ok": True}},
+         {"cmd": "rollback", "socket": UPDATE_SOCKET, "times": 1, "reply": {
+             "ok": False, "message": "no previous version recorded to roll back to"}},
+         {"cmd": "rollback", "socket": UPDATE_SOCKET, "times": 1, "error": True},
+         {"cmd": "apply", "socket": UPDATE_SOCKET, "reply": {"ok": True, "message": "viewer"}},
+         {"cmd": "rollback", "socket": UPDATE_SOCKET, "reply": {"ok": True, "message": "viewer"}}]),
     "update/settings": ({"accounts": [ADMIN, VIEWER]}, [
         *_login(), {"post": "/update/auto-security", "form": {"enabled": "true"}}, {"get": "/update?success=ok"},
         {"post": "/update/auto-security", "form": {}},

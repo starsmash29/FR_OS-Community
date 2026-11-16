@@ -40,11 +40,19 @@ func TestUpdateHelperAnswersFullPeersOnly(t *testing.T) {
 			t.Errorf("uid %d: %s, want %s", uid, got, want)
 		}
 	}
-	// Signed releases are phase 4f-4's.
-	for _, cmd := range []string{"apply", "rollback"} {
-		want := `{"ok":false,"message":"unknown command '` + cmd + `'"}`
-		if got := ask(0, `{"cmd": "`+cmd+`", "version": "2.0.0"}`); got != want {
-			t.Errorf("%s: %s, want %s", cmd, got, want)
+	// A development build installs no release: its version isn't one
+	// (fails closed); and nothing was installed to roll back from. The
+	// rest of apply and rollback is apply.Updater's (its tests, the 1.x
+	// replay of the update cases).
+	for line, want := range map[string]string{
+		`{"cmd": "apply", "version": "2.0.0"}`: `{"ok":false,"message":"not a recognized vMAJOR.MINOR.PATCH version: '0.0.0-dev'"}`,
+		`{"cmd": "apply", "version": ""}`:      `{"ok":false,"message":"'version' must be a non-empty string"}`,
+		`{"cmd": "apply", "version": 2}`:       `{"ok":false,"message":"'version' must be a non-empty string"}`,
+		`{"cmd": "apply"}`:                     `{"ok":false,"message":"'version' must be a non-empty string"}`,
+		`{"cmd": "rollback"}`:                  `{"ok":false,"message":"no previous version recorded to roll back to"}`,
+	} {
+		if got := ask(0, line); got != want {
+			t.Errorf("%s: %s, want %s", line, got, want)
 		}
 	}
 	if got := ask(0, `[1]`); got != `{"ok":false,"message":"invalid request: request must be a JSON object"}` {

@@ -10,13 +10,41 @@ trusts (`release`, 1.x's `frfw.release_signing`). Each release carries:
 | `SHA256SUMS` | sha256 of both |
 | `SHA256SUMS.sig` | Ed25519 signature over `SHA256SUMS` |
 
-The updater (phase 4f-4b) downloads the tarball, `SHA256SUMS` and the
-signature, checks the signature against the public keys compiled into
-the version *already installed* (`release/keys/`), checks the tarball
-against the signed checksum, and only then unpacks and installs it. It
-installs only a version newer than the one running (ROADMAP SEC-12), so
-release versions must always go up: a fix to an old line ships as a new,
-higher version.
+The updater (`apply.Updater`: the Update screen through the
+update-helper, `firewall-cli update apply`, and `fr-update-check.timer`
+for a security release when `update.auto_install_security` is on)
+downloads the tarball, `SHA256SUMS` and the signature from the release's
+tag (`https://github.com/<repo>/releases/download/v<version>/`), or takes
+them from its cache, `/opt/fr_os/releases/<version>/`. It checks the
+signature against the public keys compiled into the version *already
+installed* (`release/keys/`) and the tarball against the signed
+checksum, and only then unpacks it -- regular files and directories
+only, every path inside one top directory `fr_os-<version>/` -- and
+checks it is an FR_OS 2 release of that version. It installs the
+programs and scripts into `/usr/libexec/fr_os-releases/<version>/`, the
+units and drop-ins into `/etc`, switches `/usr/libexec/fr_os` (a symlink)
+to the new directory in one rename, and restarts what runs from it. The
+release before stays installed beside it, and its files stay in the
+cache, so a rollback (the Update screen, or `firewall-cli update
+rollback`) needs no network; the cache is verified again on every use.
+
+It installs only a version newer than the one running (ROADMAP SEC-12),
+so release versions must always go up: a fix to an old line ships as a
+new, higher version.
+
+## Versions and betas
+
+A version is `X.Y.Z`, or `X.Y.Z-beta.N` for a beta of it: `2.0.0-beta.1`
+comes before `2.0.0-beta.2`, which comes before `2.0.0`, which comes
+before `2.0.1-beta.1`. A beta is released exactly as a release is (the
+review record `docs/reviews/v2.0.0-beta.1.md`, the tag `v2.0.0-beta.1`,
+the workflow with `release_tag` = `v2.0.0-beta.1`), and signed with the
+same key. Mark its GitHub release as a *pre-release*: GitHub's "latest
+release", which the Update screen and the periodic check ask for, never
+is one, so routers aren't offered a beta. Install it from its ISO, or on
+a router that runs an older version with
+`firewall-cli update apply 2.0.0-beta.1`. A router on a beta is offered
+the final release once it is published.
 
 ## One-time setup: the signing key
 
@@ -104,7 +132,13 @@ go run ./release/reviewgate 2.0.0
    router's own check (`go run ./release/verify`) accepts every file.
 
 A run without `release_tag` -- from a branch or a pull request -- never
-touches the `release` environment: its image and tarball are unsigned.
+touches the `release` environment. It makes a key of its own for the
+run, trusted by that run's image only (`release/keys/boot-test.pem`,
+never committed), and signs two tarballs with it: the image's own, and
+the next version's beta built from the same commit (`FROS_TEST_VERSION`,
+which nothing else uses). The boot test installs the second from the
+Update screen and rolls back to the first; the key is deleted before
+the job ends. The ISO's own `SHA256SUMS` stays unsigned.
 Every action the workflow uses is pinned to a commit
 (`installer/release_test.go`).
 

@@ -1009,3 +1009,69 @@ differences:
   `scripts/sign-sums.sh` refusing a key this commit doesn't ship and
   checking the signature as a router will (`go run ./release/verify`),
   and every action pinned to a commit.
+
+## 2026-11-16: a signed release, installed and rolled back (phase 4f-4b)
+
+`update.jsonl` is new: `reference/test_fros_update_cases.py` has 1.x's
+`frfw.update` install and roll back releases through the update-helper
+(`apply`, `rollback`) and `firewall-cli update apply` / `rollback`, and
+check for a newer one (`firewall-cli update check` / `auto`), with the
+downloads and GitHub's answers from a table, the steps that change the
+system recorded instead of run, and the state file, the check cache, the
+release cache and the alerts left recorded. The releases are FR_OS 2's
+in shape and name, signed with a key made from a fixed seed for these
+cases. `apply.Updater`, the update-helper and `firewall-cli update`
+replay every case, and the webUI session `update/install` replays the
+Update screen's two buttons. The differences:
+
+- **What is installed is the release's programs, not its source.** 1.x
+  unpacks a `git archive` and runs pip, as root, from the cache. A 2.x
+  release is the tarball `installer/package-release.sh` packs (phase
+  4f-4a): its programs and scripts go into
+  `/usr/libexec/fr_os-releases/<version>/`, and `/usr/libexec/fr_os`,
+  which every unit runs from, becomes a relative symlink to it in one
+  rename -- so a power cut leaves the old release or the new one in use,
+  never half of each. Its units (`systemd/fr-*`), the journald, sysctl
+  and watchdog drop-ins and the XDP object are installed beside, each
+  through a temporary file and a rename, then `systemctl daemon-reload`.
+  Only the release switched to and the one switched from are kept
+  installed; an image whose `/usr/libexec/fr_os` is still a directory has
+  it moved to `fr_os-releases/image` by its first update. The steps are
+  what the cases record as `install`, `restart` and `webui`, in 1.x's
+  order and with 1.x's error handling; what they do is held by
+  `apply/update_test.go` on a real file tree, and by the boot test.
+- **1.x's scripts installed to `/usr/local/sbin`** have no 2.x
+  counterpart: everything a release brings is under its own directory.
+- **The services restarted** are 1.x's list, plus `fr-xdp-sni-logger`
+  and `fr-console-ports`, which 2.x has as units of their own.
+- **A release must be an FR_OS 2 release of the version asked for**:
+  its one top directory is `fr_os-<version>` (without the `v`), its
+  `VERSION` file says that version, and it has `bin/firewall-cli` and
+  `bin/fr-update-helper`. 1.x installs whatever the signed tarball
+  holds; a 2.x router that installed a 1.x source tarball would lose its
+  programs.
+- **The cache keeps what verified, not what was unpacked.** 1.x leaves
+  the unpacked `src/` in `/opt/fr_os/releases/<version>/` too; 2.x
+  unpacks into a temporary directory beside it and keeps only the
+  tarball, `SHA256SUMS` and the signature. The cache directories are
+  0755 and the files 0644, and the state file and the check cache 0644,
+  whatever the umask (1.x: the umask's).
+- **Versions may be betas**: `X.Y.Z-beta.N`, before `X.Y.Z`
+  (`version.ParseRelease`), for the update, the rollback target, the
+  review gate and the release workflow. The cases record only plain
+  versions, as 1.x knows them; a beta 1.x refuses with the same message
+  is a 2.x version. Only ASCII digits are digits (Python's `\d` takes
+  any Unicode digit).
+- **A state file that isn't UTF-8** is no history, as one that isn't
+  JSON; 1.x lets the `UnicodeDecodeError` through.
+- **The default repository is FR_OS-Community**, where FR_OS 2 is
+  released; the cases are recorded with 1.x's `DEFAULT_REPO` set to it.
+- **What is wrong with an answer that isn't JSON** is Go's parser's
+  description, after 1.x's "invalid JSON from <url>: ".
+- **The update-helper reaches the network and writes where a release
+  goes** (its unit: `AF_INET`, `AF_INET6`, no `IPAddressDeny`, and
+  `/etc/fr_os`, `/etc/systemd`, `/etc/sysctl.d`, `/usr/libexec`,
+  `/usr/local/share/fr_os` and `/opt/fr_os` writable), as 1.x's does;
+  it still answers only root and `fr_os-webui`. `fr-update-check.service`
+  is a root oneshot with the same sandbox and an empty capability
+  bounding set.

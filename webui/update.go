@@ -2,15 +2,11 @@ package webui
 
 import (
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"regexp"
-	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/starsmash29/fr_os-community/apply"
 	"github.com/starsmash29/fr_os-community/config"
 	"github.com/starsmash29/fr_os-community/version"
 )
@@ -18,24 +14,20 @@ import (
 // The update screen (1.x's routes/update.py): the installed version,
 // what the release check finds, what the periodic check left (G10/J3),
 // the kernel's status and its buttons, through the update-helper
-// (ROADMAP SEC-14, phase 4f-3b), and the two settings that are config
-// saves. Installing and rolling back a signed release go through the
-// update-helper too, which takes them in phase 4f-4; until then those
-// POSTs answer 501 (decisions.md, 3c-1).
+// (ROADMAP SEC-14, phase 4f-3b), installing and rolling back a signed
+// release, through the update-helper too (phase 4f-4b), and the two
+// settings that are config saves.
 
 // defaultUpdateRepo is where FR_OS 2's releases are looked for unless
-// update.repo says otherwise (1.x's frfw.update.DEFAULT_REPO names
-// 1.x's own repository).
-const defaultUpdateRepo = "starsmash29/FR_OS-Community"
+// update.repo says otherwise.
+const defaultUpdateRepo = apply.DefaultUpdateRepo
 
 // updateFetchTimeout is check_latest's timeout, in seconds.
-const updateFetchTimeout = 10.0
+const updateFetchTimeout = apply.UpdateCheckTimeout
 
 // maxReleaseBytes bounds GitHub's answer: a release's JSON with its
 // notes is a few KiB.
 const maxReleaseBytes = 1 << 20
-
-var releaseVersionRE = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // codenameFor is frfw.codename_for (version.Codename).
 func codenameFor(v string) string { return version.Codename(v) }
@@ -43,64 +35,10 @@ func codenameFor(v string) string { return version.Codename(v) }
 // withCodename is the templates' with_codename filter.
 func withCodename(v string) string { return version.WithCodename(v) }
 
-func trimZeros(digits string) string {
-	digits = strings.TrimLeft(digits, "0")
-	if digits == "" {
-		return "0"
-	}
-	return digits
-}
-
-// compareDigits compares two decimal numbers of any length.
-func compareDigits(a, b string) int {
-	a, b = trimZeros(a), trimZeros(b)
-	if len(a) != len(b) {
-		if len(a) < len(b) {
-			return -1
-		}
-		return 1
-	}
-	return strings.Compare(a, b)
-}
-
-// newerVersion is parse_version(latest) > parse_version(current), and
-// whether both parsed.
-func newerVersion(latest, current string) (bool, bool) {
-	l, c := releaseVersionRE.FindStringSubmatch(latest), releaseVersionRE.FindStringSubmatch(current)
-	if l == nil || c == nil {
-		return false, false
-	}
-	for i := 1; i <= 3; i++ {
-		if d := compareDigits(l[i], c[i]); d != 0 {
-			return d > 0, true
-		}
-	}
-	return false, true
-}
-
-var securityLineRE = regexp.MustCompile(`(?im)^\s*security:\s*yes\s*$`)
-
 // release is frfw.update.ReleaseInfo, as the page shows it.
 type release struct {
 	Version, Notes string
 	Security       bool
-}
-
-// pyStrOr is str(raw.get(key) or "").
-func pyStrOr(m *config.Map, key string) string {
-	v := field(m, key)
-	if !config.Truthy(v) {
-		return ""
-	}
-	return pyStr(v)
-}
-
-func releaseOf(raw *config.Map) *release {
-	tag := pyStrOr(raw, "tag_name")
-	r := &release{Version: strings.TrimPrefix(tag, "v"), Notes: pyStrOr(raw, "body")}
-	r.Security = strings.Contains(strings.ToLower(pyStrOr(raw, "name")), "[security]") ||
-		securityLineRE.MatchString(r.Notes)
-	return r
 }
 
 // checkResult is frfw.update.UpdateCheckResult: Latest nil when the
@@ -110,65 +48,25 @@ type checkResult struct {
 	UpdateAvailable bool
 }
 
-// fetchRelease is a GET of a GitHub API URL: its status and body, or
-// why it couldn't be made (1.x's frfw.update._fetch_json, which leaves
-// the JSON to the caller here). Only the update check calls it, when an
-// admin opens the update screen.
+// fetchRelease is a GET of a GitHub API URL (apply.FetchGitHub). Only
+// the update check calls it, when an admin opens the update screen.
 func fetchRelease(url string, timeout float64) (int, []byte, error) {
-	client := &http.Client{Timeout: time.Duration(timeout * float64(time.Second))}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "fr_os-update")
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReleaseBytes+1))
-	if err != nil {
-		return 0, nil, err
-	}
-	if len(body) > maxReleaseBytes {
-		return 0, nil, fmt.Errorf("the answer is larger than %d bytes", maxReleaseBytes)
-	}
-	return resp.StatusCode, body, nil
+	return apply.FetchGitHub(url, timeout)
 }
 
-// checkLatest is frfw.update.check_latest: current against the
-// repository's latest release; a refusal is the page's message.
+// checkLatest is frfw.update.check_latest (apply.CheckLatest): current
+// against the repository's latest release; a refusal is the page's
+// message.
 func (s *Server) checkLatest(current, repo string) (*checkResult, string) {
-	url := "https://api.github.com/repos/" + repo + "/releases/latest"
-	status, body, err := s.env.Fetch(url, updateFetchTimeout)
+	r, err := apply.CheckLatest(s.env.Fetch, time.Now(), current, repo)
 	if err != nil {
-		return nil, fmt.Sprintf("could not reach %s: %s", url, err)
+		return nil, err.Error()
 	}
-	if status == http.StatusNotFound {
-		return &checkResult{}, ""
+	c := &checkResult{UpdateAvailable: r.UpdateAvailable}
+	if r.Latest != nil {
+		c.Latest = &release{Version: r.Latest.Version, Notes: r.Latest.Notes, Security: r.Latest.Security}
 	}
-	if status >= 400 {
-		return nil, fmt.Sprintf("GitHub returned %d checking %s", status, repo)
-	}
-	if !utf8.Valid(body) {
-		return nil, fmt.Sprintf("invalid JSON from %s: not UTF-8", url)
-	}
-	v, err := config.ParseJSONLastWins(body)
-	if err != nil {
-		return nil, fmt.Sprintf("invalid JSON from %s: %s", url, err)
-	}
-	m, ok := v.(*config.Map)
-	if !ok {
-		return nil, "unexpected release response from GitHub for " + repo
-	}
-	latest := releaseOf(m)
-	newer, parsed := newerVersion(latest.Version, current)
-	if !parsed {
-		// A tag that isn't vMAJOR.MINOR.PATCH: different means new.
-		newer = latest.Version != "" && latest.Version != current
-	}
-	return &checkResult{Latest: latest, UpdateAvailable: newer}, ""
+	return c, ""
 }
 
 // updateRepo is _resolve_repo: update.repo of a config that parses.
@@ -388,6 +286,47 @@ func (s *Server) kernelAction(cmd, failed string) (*answer, error) {
 		return errorRedirect("/update", pyStr(m)), nil
 	}
 	return errorRedirect("/update", failed), nil
+}
+
+// updateAction is apply_update and rollback_update: the update-helper's
+// answer, and the webUI's restart on its way.
+func (s *Server) updateAction(send func() (*config.Map, error), done, failed string) (*answer, error) {
+	result, err := send()
+	if err != nil {
+		var he *HelperError
+		if errors.As(err, &he) {
+			// 1.x lets the helper's error through (an error page).
+			return nil, errInternal
+		}
+		return nil, err
+	}
+	if config.Truthy(field(result, "ok")) {
+		m := done
+		if v, ok := result.Get("message"); ok {
+			m = pyStr(v)
+		}
+		return successRedirect("/update", m+" -- the webUI will restart in a few seconds."), nil
+	}
+	if m := field(result, "message"); config.Truthy(m) {
+		return errorRedirect("/update", pyStr(m)), nil
+	}
+	return errorRedirect("/update", failed), nil
+}
+
+// applyUpdate installs the version the screen offers (or any newer one
+// posted), through the update-helper, which verifies it first.
+func (s *Server) applyUpdate(q *request) (*answer, error) {
+	var target string
+	if err := q.fields(func(p *formParams) { target = p.str("version") }); err != nil {
+		return nil, err
+	}
+	return s.updateAction(func() (*config.Map, error) { return s.helper.UpdateApply(target) },
+		"Update applied", "Update failed")
+}
+
+// rollbackUpdate goes back to the version this router updated from.
+func (s *Server) rollbackUpdate(q *request) (*answer, error) {
+	return s.updateAction(s.helper.UpdateRollback, "Rolled back", "Rollback failed")
 }
 
 // kernelCheck looks for Debian's newer kernel now instead of at the

@@ -72,6 +72,13 @@ type Paths struct {
 	// /boot, where Debian's kernel packages put their images.
 	KernelUpdateState, KernelInitrds, ImageRoot   string
 	MediumKernel, MediumInitrd, ModulesRoot, Boot string
+	// What installing a release reads and writes (frfw.update): its
+	// history and the periodic check's cache, the verified releases kept
+	// for a rollback, the versions' program directories and the symlink
+	// to the one in use, and where its units and drop-ins go.
+	UpdateState, UpdateCheck, Releases         string
+	Libexec, LibexecReleases, SystemdUnits     string
+	JournaldDropin, SysctlIPv6, WatchdogDropin string
 }
 
 // DefaultPaths are the router's.
@@ -106,6 +113,10 @@ func DefaultPaths() Paths {
 		KernelUpdateState: "/etc/fr_os/kernel_update.json", KernelInitrds: "/var/lib/fr_os/kernels",
 		ImageRoot: "/run/live/rootfs", MediumKernel: "/run/live/medium/live/vmlinuz",
 		MediumInitrd: "/run/live/medium/live/initrd.img", ModulesRoot: "/usr/lib/modules", Boot: "/boot",
+		UpdateState: "/etc/fr_os/update_state.json", UpdateCheck: "/etc/fr_os/update_check.json",
+		Releases: "/opt/fr_os/releases", Libexec: "/usr/libexec/fr_os", LibexecReleases: "/usr/libexec/fr_os-releases",
+		SystemdUnits: "/etc/systemd/system", JournaldDropin: "/etc/systemd/journald.conf.d/fr_os.conf",
+		SysctlIPv6: "/etc/sysctl.d/50-fr_os-ipv6.conf", WatchdogDropin: "/etc/systemd/system.conf.d/fr_os-watchdog.conf",
 	}
 }
 

@@ -1,0 +1,45 @@
+[Unit]
+Description=FR_OS update check (records what's available for the webUI's banner; security-lessons G10/J3)
+Documentation=https://github.com/starsmash29/FR_OS-Community
+# Asks GitHub's Releases API for the latest release and records it in
+# /etc/fr_os/update_check.json for the webUI's banner (red for a security
+# release). With update.auto_install_security (J3, off unless an admin
+# turns it on) it also installs a security release, verified first as
+# every update, and says so in the security alerts either way.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/fr_os/firewall-cli update auto /etc/fr_os/config.yaml
+Nice=10
+TimeoutStartSec=30min
+# Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
+# Root like fr-update-helper, and with its sandbox: with
+# update.auto_install_security it installs a release the same way
+# (apply/update.go), so it writes what an install writes, holds no
+# capability and talks to systemd and to GitHub.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/var/log/fr_os /etc/fr_os /etc/systemd /etc/sysctl.d /usr/libexec /usr/local/share/fr_os /opt/fr_os
+ProtectHome=yes
+UMask=0077
+ProtectProc=invisible
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+SystemCallFilter=~@privileged @resources @clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap @mount
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+CapabilityBoundingSet=

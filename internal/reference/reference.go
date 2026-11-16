@@ -498,3 +498,65 @@ type ReleaseCase struct {
 
 // ReleaseCases loads testdata/reference/release.jsonl.
 func ReleaseCases() ([]ReleaseCase, error) { return load[ReleaseCase]("release.jsonl") }
+
+// UpdateAnswer is what a URL answers in an update case: Data (hex) or
+// Body, an HTTP error Status with its Reason, or Error, urllib's
+// URLError reason. A URL in no table can't be resolved.
+type UpdateAnswer struct {
+	Data   *string `json:"data"`
+	Body   *string `json:"body"`
+	Status int     `json:"status"`
+	Reason string  `json:"reason"`
+	Error  *string `json:"error"`
+}
+
+// UpdateAlert is one security alert an update case raised.
+type UpdateAlert struct {
+	Message string `json:"message"`
+	User    string `json:"user"`
+	Client  string `json:"client"`
+}
+
+// UpdateCase is one of 1.x's signed release updates (update.jsonl): op
+// "helper" is the update-helper's answer to Request, op "cli"
+// `firewall-cli` with Argv (@ROOT@ the case's root), with Installed the
+// version running, the State file, the update Check cache and the
+// releases Cache (version, file name, hex) there before, Downloads and
+// Github answering their URLs, the Config at @ROOT@/etc/fr_os/config.yaml,
+// and Fail the step (install, restart, webui) made to fail with
+// FailMessage. Key is the one trusted public key (PEM). What it left:
+// the Reply, or the exit Code and output; the Steps run in order
+// ("download <url>", "install <directory>", "restart", "webui"), the
+// state file and check cache after (nil: none), each cache directory's
+// files (the unpacked copy aside), and the Alerts. Paths are under
+// @ROOT@, a temporary directory's name is @TMP@.
+type UpdateCase struct {
+	ID              string                       `json:"id"`
+	Now             float64                      `json:"now"`
+	Key             string                       `json:"key"`
+	Op              string                       `json:"op"`
+	Request         string                       `json:"request"`
+	Argv            []string                     `json:"argv"`
+	Installed       string                       `json:"installed"`
+	State           *string                      `json:"state"`
+	CheckCache      *string                      `json:"check_cache"`
+	Cache           map[string]map[string]string `json:"cache"`
+	Downloads       map[string]UpdateAnswer      `json:"downloads"`
+	Github          map[string]UpdateAnswer      `json:"github"`
+	Config          *string                      `json:"config"`
+	Fail            string                       `json:"fail"`
+	FailMessage     string                       `json:"fail_message"`
+	Repo            string                       `json:"repo"`
+	Reply           jsontext.Value               `json:"reply"`
+	Code            *int                         `json:"code"`
+	Stdout          string                       `json:"stdout"`
+	Stderr          string                       `json:"stderr"`
+	Steps           []string                     `json:"steps"`
+	StateAfter      *string                      `json:"state_after"`
+	CheckCacheAfter *string                      `json:"check_cache_after"`
+	CacheAfter      map[string][]string          `json:"cache_after"`
+	Alerts          []UpdateAlert                `json:"alerts"`
+}
+
+// UpdateCases loads testdata/reference/update.jsonl.
+func UpdateCases() ([]UpdateCase, error) { return load[UpdateCase]("update.jsonl") }

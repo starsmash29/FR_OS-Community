@@ -137,6 +137,37 @@ func TestTheReviewMustBeOfThisRelease(t *testing.T) {
 	}
 }
 
+// A beta is reviewed as any release, and is a previous release to the
+// final one (decisions.md, "phase 4f-4b").
+func TestABetaIsAReleaseToo(t *testing.T) {
+	dir := repo(t)
+	beta := run(t, dir, "rev-parse", "HEAD")
+	run(t, dir, "tag", "v0.2.0-beta.1")
+	write(t, filepath.Join(dir, "a"), "3")
+	run(t, dir, "commit", "-qam", "third")
+	record(t, dir, beta, "A, B")
+	if p := check("0.2.0", dir); !says(p, "before the previous release v0.2.0-beta.1") {
+		t.Errorf("reviewed the beta, not the release: %v", p)
+	}
+	write(t, filepath.Join(dir, "docs", "reviews", "v0.2.0-beta.2.md"), strings.ReplaceAll(
+		read(t, filepath.Join(dir, "docs", "reviews", "v0.2.0.md")), "`"+beta+"`", "`"+run(t, dir, "rev-parse", "HEAD")+"`"))
+	if p := check("v0.2.0-beta.2", dir); len(p) != 0 {
+		t.Errorf("beta.2: %v", p)
+	}
+	if p := check("0.2.0-rc.1", dir); !says(p, "not a version") {
+		t.Errorf("rc: %v", p)
+	}
+}
+
+func read(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func TestATableIsRequired(t *testing.T) {
 	dir := repo(t)
 	write(t, filepath.Join(dir, "docs", "reviews", "v0.2.0.md"),

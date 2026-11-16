@@ -54,7 +54,8 @@ var root = map[string]string{
 	"fr-console-ports.service":     "reads root's applied config and writes root's console files, with no capability",
 	"fr-kernel-confirm.service":    "writes the boot environment on the persistence partition, reads the ruleset (SEC-14)",
 	"fr-kernel-prepare.service":    "dpkg installs Debian's kernel package into the persistent root (SEC-14)",
-	"fr-update-helper.service":     "stages a kernel on the persistence partition, with no capability at all (SEC-14)",
+	"fr-update-helper.service":     "installs a signed release and stages a kernel, with no capability at all (SEC-14)",
+	"fr-update-check.service":      "the periodic release check; installs a security release when asked to (J3), no capability",
 }
 
 // broader is what a service holds beyond everywhere, and why: the
@@ -570,12 +571,34 @@ func TestKernelPrepareAndUpdateHelperUnits(t *testing.T) {
 		t.Errorf("fr-kernel-prepare.timer: WantedBy=%q", got)
 	}
 
+	// Installing a release (phase 4f-4b): what an install writes, and
+	// GitHub's release files for one not in the cache yet.
+	installs := "/etc/fr_os /etc/systemd /etc/sysctl.d /usr/libexec /usr/local/share/fr_os /opt/fr_os"
 	s = service(t, "fr-update-helper.service")
 	for key, want := range map[string]string{"ExecStart": "/usr/libexec/fr_os/fr-update-helper",
-		"ReadWritePaths": "-/run/live/persistence -/var/log/fr_os", "CapabilityBoundingSet": "",
-		"IPAddressDeny": "any", "RestrictAddressFamilies": "AF_UNIX AF_NETLINK"} {
+		"ReadWritePaths": "-/run/live/persistence -/var/log/fr_os " + installs, "CapabilityBoundingSet": "",
+		"IPAddressDeny": "", "RestrictAddressFamilies": "AF_UNIX AF_NETLINK AF_INET AF_INET6"} {
 		if got := last(s, key); got != want {
 			t.Errorf("fr-update-helper.service: %s=%q, want %q", key, got, want)
+		}
+	}
+	// The periodic check (G10/J3), with the update-helper's sandbox: it
+	// installs a security release the same way when an admin turned that
+	// on. Its timer as 1.x's.
+	s = service(t, "fr-update-check.service")
+	for key, want := range map[string]string{
+		"ExecStart": "/usr/libexec/fr_os/firewall-cli update auto /etc/fr_os/config.yaml", "Type": "oneshot",
+		"ReadWritePaths": "-/var/log/fr_os " + installs, "CapabilityBoundingSet": "",
+		"RestrictAddressFamilies": "AF_UNIX AF_NETLINK AF_INET AF_INET6"} {
+		if got := last(s, key); got != want {
+			t.Errorf("fr-update-check.service: %s=%q, want %q", key, got, want)
+		}
+	}
+	timer = section(t, "fr-update-check.timer", "[Timer]")
+	for key, want := range map[string]string{"OnBootSec": "10min", "OnUnitActiveSec": "12h",
+		"RandomizedDelaySec": "1h", "Persistent": "true"} {
+		if got := last(timer, key); got != want {
+			t.Errorf("fr-update-check.timer: %s=%q, want %q", key, got, want)
 		}
 	}
 	if !slices.Contains(strings.Fields(last(s, "SystemCallFilter")), "@reboot") {

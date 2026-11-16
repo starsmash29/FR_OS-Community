@@ -61,11 +61,15 @@ boxes: the LAN must stay out of its way (ROADMAP NET-12).
    through the update-helper and reboots; boot 10 comes up on the
    router-built initrd, and the router confirms the trial against what
    worked when it was started (SEC-23).
-FR_OS 1.x's boot test went on to check the router's files against its
-signed release and the persistence layer for planted files (SEC-15,
-SEC-22, SEC-29) and the update helper's refusal of an older release
-(SEC-12). FR_OS 2 has none of that yet: those checks come back with
-phase 4f-4.
+11. Eleventh and twelfth boot, with --next-release (phase 4f-4b): a
+   signed release newer than the image's, put in the router's release
+   cache, is installed from the Update screen -- after an older one is
+   refused (ROADMAP SEC-12) -- and the webUI restarts on its programs.
+   Boot 12 comes up on it, rolls back to the image's own release from the
+   Update screen, and /usr/libexec/fr_os names the image's release again.
+FR_OS 1.x's boot test also checked the router's files against its signed
+release and the persistence layer for planted files (SEC-15, SEC-22,
+SEC-29); those checks are not in FR_OS 2 yet.
 
 With --uefi the VM boots with UEFI firmware (OVMF, the `ovmf` package)
 instead of BIOS; the CI runs the test both ways. Either way the kernel has
@@ -1347,6 +1351,121 @@ def run_kernel_update_from_the_webui(check, workdir: Path, disk: Path, iso: Path
             print_journal(upper, "fr-kernel-confirm.service", "-b")
 
 
+def installed_version(page: str) -> str | None:
+    """The version the Update screen says is installed."""
+    found = re.search(r'Installed: <span class="badge">([^<]+)</span>', page)
+    return found.group(1) if found else None
+
+
+def wait_for_version(opener, version: str, timeout: float) -> bool:
+    """Until the Update screen says version is installed: after an
+    install or a rollback the webUI restarts a few seconds later, on the
+    programs of the release now in use."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if installed_version(get(opener, "/update")) == version:
+                return True
+        except OSError:
+            pass
+        time.sleep(3)
+    return False
+
+
+def libexec_release(upper: Path) -> str | None:
+    """Which release's directory /usr/libexec/fr_os names, as the
+    persistence layer holds it (None: still the image's own link)."""
+    link = upper / "usr" / "libexec" / "fr_os"
+    return os.readlink(link) if link.is_symlink() else None
+
+
+def run_release_update_from_the_webui(check, workdir: Path, disk: Path, kvm: bool, uefi, boot_timeout: float,
+                                      next_release: Path) -> None:
+    """Boots 11-12: a signed release installed from the Update screen and
+    rolled back (phase 4f-4b). The CI's test build signs its own release
+    and the next one (a beta of the next version, the same programs) with
+    a key it makes for the run and throws away; the image trusts it. The
+    next release goes into the cache, as a download would leave it, since
+    the VM can't reach GitHub."""
+    tarballs = sorted(next_release.glob("fr_os-*-amd64.tar.gz"))
+    if not check(len(tarballs) == 1 and (next_release / "SHA256SUMS.sig").is_file(),
+                 f"the next release to install is signed: {[p.name for p in next_release.iterdir()]}"):
+        return
+    target = tarballs[0].name.removeprefix("fr_os-").removesuffix("-amd64.tar.gz")
+    with persistence_partition(disk, writable=True) as upper:
+        cache = upper / "opt" / "fr_os" / "releases" / target
+        cache.mkdir(parents=True, exist_ok=True)
+        os.chmod(cache, 0o755)
+        for name in (tarballs[0].name, "SHA256SUMS", "SHA256SUMS.sig"):
+            shutil.copyfile(next_release / name, cache / name)
+            os.chmod(cache / name, 0o644)
+
+    print(f"boot 11: release {target} installed from the Update screen")
+    vm = Vm(workdir, disk, 11, kvm, uefi)
+    opener = webui_opener()
+    page = wait_for_webui(opener, boot_timeout)
+    landed = post(opener, "/login", {"username": NEW_USERNAME, "password": NEW_PASSWORD}) if page else ""
+    check(landed.endswith("/"), "signed in")
+    image = installed_version(get(opener, "/update")) if landed else None
+    check(image is not None, f"the Update screen says which version is installed: {image}")
+    installed = False
+    if landed and image:
+        # ROADMAP SEC-12: never an older release, which brings back what
+        # was fixed since -- refused before anything is fetched.
+        refused = urllib.parse.unquote_plus(post(opener, "/update/apply", {"version": "0.0.1"}))
+        check("refusing to install 0.0.1: it is older than the installed" in refused,
+              "an older release is refused (ROADMAP SEC-12)" + ("" if "refusing" in refused else f": {refused[-300:]}"))
+        done = urllib.parse.unquote_plus(post(opener, "/update/apply", {"version": target}, timeout=360))
+        check(f"Updated to {target}" in done, f"the update-helper verified and installed {target}"
+              + ("" if "Updated" in done else f": {done[-400:]}"))
+        installed = wait_for_version(opener, target, 120)
+        check(installed, f"...the webUI restarted on {target}'s programs")
+    running = vm.proc.poll() is None
+    check(running and vm.power_off(), "powered off" if running else "powered off (it had already stopped by itself)")
+    vm.kill()
+    with persistence_partition(disk) as upper:
+        link = libexec_release(upper)
+        check(link == f"fr_os-releases/{target}"
+              and (upper / "usr" / "libexec" / "fr_os-releases" / target / "firewall-cli").is_file(),
+              f"/usr/libexec/fr_os names {target}'s directory: {link}")
+        audit = (upper / "var" / "log" / "fr_os" / "audit.log").read_text(errors="replace")
+        state = json.loads((upper / "etc" / "fr_os" / "update_state.json").read_text())
+        check(state.get("current_version") == target and state.get("previous_version") == image
+              and (state.get("last_update") or {}).get("status") == "success",
+              f"the state file records {target}, with {image} to roll back to: {state}")
+        if not installed:
+            print_journal(upper, "fr-update-helper.service", "-b", lines=60)
+            print(audit[-2000:])
+    if not installed:
+        return
+
+    print(f"boot 12: {target} after a reboot, rolled back to {image}")
+    vm = Vm(workdir, disk, 12, kvm, uefi)
+    opener = webui_opener()
+    page = wait_for_webui(opener, boot_timeout)
+    landed = post(opener, "/login", {"username": NEW_USERNAME, "password": NEW_PASSWORD}) if page else ""
+    check(landed.endswith("/") and installed_version(get(opener, "/update")) == target,
+          f"the router came up on {target}")
+    back = False
+    if landed:
+        done = urllib.parse.unquote_plus(post(opener, "/update/rollback", {}, timeout=360))
+        check(f"Rolled back to {image}" in done, f"rolled back to {image}, the image's own release, verified again"
+              + ("" if "Rolled back" in done else f": {done[-400:]}"))
+        back = wait_for_version(opener, image, 120)
+        check(back, f"...the webUI restarted on {image}'s programs")
+    running = vm.proc.poll() is None
+    check(running and vm.power_off(), "powered off" if running else "powered off (it had already stopped by itself)")
+    vm.kill()
+    with persistence_partition(disk) as upper:
+        link = libexec_release(upper)
+        state = json.loads((upper / "etc" / "fr_os" / "update_state.json").read_text())
+        check(link == f"fr_os-releases/{image}" and state.get("current_version") == image
+              and state.get("previous_version") is None,
+              f"/usr/libexec/fr_os names {image}'s directory again, and nothing is left to roll back: {link}, {state}")
+        if not back:
+            print_journal(upper, "fr-update-helper.service", "-b", lines=60)
+
+
 def group_id(upper: Path, name: str) -> int | None:
     """A group's id, from the router's own /etc/group (FR_OS creates its
     accounts at boot, so the file is on the persistence layer)."""
@@ -2125,7 +2244,7 @@ def get(opener, path: str) -> str:
     return page
 
 
-def post(opener, path: str, fields: dict) -> str:
+def post(opener, path: str, fields: dict, timeout: float = 30) -> str:
     """Submit a form the way the page's own form does -- with the
     session's CSRF token -- and return the URL it lands on (the page
     itself is kept as `opener.last_page`)."""
@@ -2133,7 +2252,7 @@ def post(opener, path: str, fields: dict) -> str:
     if token:
         fields = {**fields, "csrf_token": token}
     data = urllib.parse.urlencode(fields, doseq=True).encode()
-    with opener.open(f"https://{WEBUI_HOST}:{WEBUI_PORT}{path}", data=data, timeout=30) as resp:
+    with opener.open(f"https://{WEBUI_HOST}:{WEBUI_PORT}{path}", data=data, timeout=timeout) as resp:
         opener.last_page = resp.read().decode()
         _remember_csrf(opener, opener.last_page)
         return resp.geturl()
@@ -2170,6 +2289,8 @@ def main() -> int:
     parser.add_argument("--workdir", type=Path, help="keep the disk image and serial logs here")
     parser.add_argument("--kvm", action="store_true", help="use KVM (much faster) if /dev/kvm exists")
     parser.add_argument("--uefi", action="store_true", help="boot with UEFI firmware (OVMF) instead of BIOS")
+    parser.add_argument("--next-release", type=Path,
+                        help="a signed release newer than the image's, to install and roll back (boots 11-12)")
     args = parser.parse_args()
     if not shutil.which("qemu-system-x86_64"):
         print("qemu-system-x86_64 not found", file=sys.stderr)
@@ -2657,6 +2778,8 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
 
     run_kernel_trials(check, workdir, disk, Path(args.iso), kvm, uefi, boot_timeout)
     run_kernel_update_from_the_webui(check, workdir, disk, Path(args.iso), kvm, uefi, boot_timeout)
+    if args.next_release:
+        run_release_update_from_the_webui(check, workdir, disk, kvm, uefi, boot_timeout, args.next_release)
 
     print()
     if check.failures:

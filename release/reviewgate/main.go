@@ -24,8 +24,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
+
+	"github.com/starsmash29/fr_os-community/version"
 )
 
 // closed is how a critical or high finding may end; anything else
@@ -33,8 +34,6 @@ import (
 var closed = []string{"fixed", "accepted", "not a bug", "duplicate"}
 
 var blocking = []string{"critical", "high"}
-
-var versionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 
 func main() {
 	root := flag.String("root", ".", "the repository")
@@ -108,46 +107,30 @@ func findings(text string) []map[string]string {
 	return rows
 }
 
-func parse(m []string) [3]int {
-	var v [3]int
-	for i := range v {
-		v[i], _ = strconv.Atoi(m[i+1])
-	}
-	return v
-}
-
-func less(a, b [3]int) bool {
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return false
-}
-
 // previousRelease is the newest v* tag older than version.
-func previousRelease(root string, version [3]int) string {
+// A beta (v2.0.0-beta.1) is a release like any other, before its final
+// one (version.ParseRelease).
+func previousRelease(root string, v version.Release) string {
 	out, _ := git(root, "tag", "-l", "v*")
-	best, found := "", [3]int{}
+	best, found := "", version.Release{}
 	for _, tag := range strings.Fields(out) {
-		m := versionRE.FindStringSubmatch(tag)
-		if m == nil {
+		t, ok := version.ParseRelease(tag)
+		if !ok {
 			continue
 		}
-		v := parse(m)
-		if less(v, version) && (best == "" || less(found, v)) {
-			best, found = tag, v
+		if t.Compare(v) < 0 && (best == "" || found.Compare(t) < 0) {
+			best, found = tag, t
 		}
 	}
 	return best
 }
 
-func check(version, root string) []string {
-	m := versionRE.FindStringSubmatch(version)
-	if m == nil {
-		return []string{fmt.Sprintf("not a version: %q", version)}
+func check(ver, root string) []string {
+	v, ok := version.ParseRelease(ver)
+	if !ok {
+		return []string{fmt.Sprintf("not a version: %q", ver)}
 	}
-	plain := m[1] + "." + m[2] + "." + m[3]
+	plain := strings.TrimPrefix(ver, "v")
 	rel := filepath.Join("docs", "reviews", "v"+plain+".md")
 	data, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
@@ -178,7 +161,7 @@ func check(version, root string) []string {
 		if _, ok := git(root, "merge-base", "--is-ancestor", commit, "HEAD"); !ok {
 			problems = append(problems, "reviewed commit "+commit+" is not part of this release (not an ancestor of HEAD)")
 		}
-		if previous := previousRelease(root, parse(m)); previous != "" {
+		if previous := previousRelease(root, v); previous != "" {
 			if _, ok := git(root, "merge-base", "--is-ancestor", commit, previous); ok {
 				problems = append(problems, "reviewed commit "+commit+" is from before the previous release "+previous)
 			}

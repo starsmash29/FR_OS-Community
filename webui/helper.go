@@ -185,6 +185,20 @@ func (h helper) KernelStatus() (*config.Map, error) {
 	return h.send(h.env.Paths.UpdateSocket(), cmdMap("cmd", "kernel_status"), 60)
 }
 
+// updateTimeout is update_client.DEFAULT_TIMEOUT: an install downloads,
+// unpacks and restarts services.
+const updateTimeout = 300
+
+// UpdateApply is the update-helper's apply: install version.
+func (h helper) UpdateApply(version string) (*config.Map, error) {
+	return h.send(h.env.Paths.UpdateSocket(), cmdMap("cmd", "apply", "version", version), updateTimeout)
+}
+
+// UpdateRollback is the update-helper's rollback.
+func (h helper) UpdateRollback() (*config.Map, error) {
+	return h.send(h.env.Paths.UpdateSocket(), cmdMap("cmd", "rollback"), updateTimeout)
+}
+
 // Kernel is the update-helper's kernel_check, kernel_try or
 // kernel_cancel.
 func (h helper) Kernel(cmd string) (*config.Map, error) {

@@ -9,20 +9,24 @@ Type=simple
 ExecStart=/usr/libexec/fr_os/fr-update-helper
 Restart=on-failure
 # Sandbox (security-lessons I1; checked by systemd/sandbox_test.go).
-# Root, because it stages a kernel on the persistence partition (outside
-# the overlay, /run/live/persistence) and asks systemd to start
+# Root, because it installs a signed release (apply/update.go): the
+# programs into /usr/libexec/fr_os-releases/<version>/ and the
+# /usr/libexec/fr_os symlink switched to them, the XDP program, the
+# units and drop-ins, the verified release kept in /opt/fr_os/releases,
+# its history in /etc/fr_os; it stages a kernel on the persistence
+# partition (outside the overlay, /run/live/persistence) and asks
+# systemd to restart what an update changed, to start
 # fr-kernel-prepare.service or to reboot into a trial -- never the kernel
-# itself. It writes nothing else but the audit log's security alerts,
-# holds no capability, and talks to nothing but systemd and netlink
-# (what works now, for the trial to work again: SEC-23). 1.x's signed
-# release install comes with phase 4f-4.
+# itself. It holds no capability: every file it writes is root's. It
+# reaches the internet only to download a release an admin asked for
+# that isn't in the cache yet (GitHub's release files, which verify or
+# are refused).
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=-/run/live/persistence -/var/log/fr_os
+ReadWritePaths=-/run/live/persistence -/var/log/fr_os /etc/fr_os /etc/systemd /etc/sysctl.d /usr/libexec /usr/local/share/fr_os /opt/fr_os
 ProtectHome=yes
 UMask=0077
 ProtectProc=invisible
-IPAddressDeny=any
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
@@ -39,7 +43,7 @@ SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes
 SystemCallFilter=~@privileged @resources @clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap @mount
 SystemCallErrorNumber=EPERM
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 CapabilityBoundingSet=
 
 [Install]
