@@ -1352,9 +1352,10 @@ def run_kernel_update_from_the_webui(check, workdir: Path, disk: Path, iso: Path
 
 
 def installed_version(page: str) -> str | None:
-    """The version the Update screen says is installed."""
-    found = re.search(r'Installed: <span class="badge">([^<]+)</span>', page)
-    return found.group(1) if found else None
+    """The version the Update screen says is installed (the badge adds its
+    codename: '2.0.0 “Ivar”')."""
+    found = re.search(r'Installed: <span class="badge">([^<\s]+)', page)
+    return html.unescape(found.group(1)) if found else None
 
 
 def wait_for_version(opener, version: str, timeout: float) -> bool:
