@@ -150,6 +150,45 @@ func TestTheSigningKeyStaysInItsJobs(t *testing.T) {
 	}
 }
 
+// publish signs what the keyless image job hands it only after checking
+// that its tarball is the one sign-stage signed, with the keys this
+// commit ships (review v2.0.0-beta.1 R1): a compromised image job can't
+// have the release key sign a tarball of its own.
+func TestPublishSignsOnlyTheTarballSignStageSigned(t *testing.T) {
+	doc, err := config.LoadYAML(read(t, "../.github/workflows/build-installer.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := doc.(*config.Map)
+	j, _ := jobs.Get("jobs")
+	publish, _ := j.(*config.Map).Get("publish")
+	steps, _ := publish.(*config.Map).Get("steps")
+	at := map[string]int{}
+	for i, step := range steps.([]config.Value) {
+		text, err := config.DumpYAML(step)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for marker, s := range map[string]string{"download": "name: release-signed",
+			"verify": "go run ./release/verify signed/SHA256SUMS", "cmp": `cmp "signed/$tarball" "dist/$tarball"`,
+			"sign": "sign-sums.sh dist/SHA256SUMS"} {
+			if strings.Contains(text, s) {
+				if _, ok := at[marker]; !ok {
+					at[marker] = i
+				}
+			}
+		}
+	}
+	for _, marker := range []string{"download", "verify", "cmp", "sign"} {
+		if _, ok := at[marker]; !ok {
+			t.Fatalf("publish has no %s step (%v)", marker, at)
+		}
+	}
+	if !(at["download"] < at["verify"] && at["verify"] <= at["cmp"] && at["cmp"] < at["sign"]) {
+		t.Errorf("publish signs before it checks the tarball: %v", at)
+	}
+}
+
 // A test build's throwaway key (phase 4f-4b) and the release it signs
 // for the boot test are a test build's only: every step that makes, uses
 // or names them runs only without release_tag, so a release's image

@@ -315,6 +315,20 @@ jobs:
         with:
           name: fr-os-installer
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: release-signed
+          path: signed
+      - name: Check the tarball is the one sign-stage signed
+        # The image job has no key but runs apt, live-build and QEMU as
+        # root: what it hands over is signed only if its tarball is,
+        # byte for byte, the one sign-stage signed from the stage job's
+        # build, checked with the keys this commit ships (review
+        # v2.0.0-beta.1 R1).
+        run: |
+          tarball="fr_os-$(cat VERSION)-amd64.tar.gz"
+          go run ./release/verify signed/SHA256SUMS
+          cmp "signed/$tarball" "dist/$tarball"
       - name: Sign SHA256SUMS
         # A release must be signed: routers refuse an update whose
         # SHA256SUMS.sig doesn't verify (docs/RELEASING.md). Only what a

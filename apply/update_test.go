@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/starsmash29/fr_os-community/release"
+	"github.com/starsmash29/fr_os-community/version"
 )
 
 // The installer on a real file tree under a temporary root: a release
@@ -156,6 +157,9 @@ func (r *updateRig) image(v string) {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("image "+v), 0o755); err != nil {
 			r.t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte(v+"\n"), 0o644); err != nil {
+		r.t.Fatal(err)
 	}
 	if err := os.Symlink("fr_os-releases/"+v, p.Libexec); err != nil {
 		r.t.Fatal(err)
@@ -339,6 +343,54 @@ func TestAnUpdateOnlyGoesForward(t *testing.T) {
 	}
 	if link := r.link(); link != "fr_os-releases/2.0.0" {
 		t.Errorf("-> %s", link)
+	}
+}
+
+// The update-helper keeps running across an update it installed: the
+// version it compares with is the release in use, read for each request,
+// never the one it was built as, so a second request can't take the
+// router back below the release it just installed (SEC-12; review
+// v2.0.0-beta.1 R2), and the release in use is never replaced.
+func TestTheInstalledVersionIsTheReleaseInUse(t *testing.T) {
+	r := newUpdateRig(t)
+	r.image("2.0.0")
+	r.cache("2.0.1", r.signed("2.0.1", releaseFiles("2.0.1")))
+	r.cache("2.0.2", r.signed("2.0.2", releaseFiles("2.0.2")))
+	request := func() *Updater {
+		u := NewUpdater(r.sys, "")
+		u.Keys = r.keys
+		u.Download = func(string, string, int64) error { return errors.New("not here") }
+		return u
+	}
+	first := request()
+	if first.Installed != "2.0.0" {
+		t.Fatalf("installed %q", first.Installed)
+	}
+	if _, err := first.Apply("2.0.2"); err != nil {
+		t.Fatal(err)
+	}
+	if u := request(); u.Installed != "2.0.2" {
+		t.Errorf("after the update: installed %q", u.Installed)
+	}
+	if _, err := request().Apply("2.0.1"); err == nil ||
+		!strings.HasPrefix(err.Error(), "refusing to install 2.0.1: it is older than the installed 2.0.2") {
+		t.Errorf("2.0.1 after 2.0.2: %v", err)
+	}
+	// An updater made before the switch still believes 2.0.0.
+	if _, err := first.Apply("2.0.2"); err == nil || !strings.Contains(err.Error(), "refusing to replace 2.0.2: it is the release in use") {
+		t.Errorf("2.0.2 again: %v", err)
+	}
+	if link := r.link(); link != "fr_os-releases/2.0.2" {
+		t.Errorf("-> %s", link)
+	}
+	if got := r.read(filepath.Join(r.sys.Paths.Libexec, "VERSION")); got != "2.0.2\n" {
+		t.Errorf("VERSION %q", got)
+	}
+	if err := os.Remove(filepath.Join(r.sys.Paths.LibexecReleases, "2.0.2", "VERSION")); err != nil {
+		t.Fatal(err)
+	}
+	if got := InstalledVersion(r.sys.Paths); got != version.Version {
+		t.Errorf("without VERSION: %q", got)
 	}
 }
 
