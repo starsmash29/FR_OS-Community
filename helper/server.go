@@ -44,6 +44,13 @@ type Env struct {
 	Nft NftRunner
 	// Now is the time as Python's time.time() gives it.
 	Now func() float64
+
+	// What `firewall-cli update` works with: the installed version (""
+	// is version.Version), GitHub's Releases API (nil: apply.FetchGitHub)
+	// and the installer for a repository (nil: apply.NewUpdater).
+	Installed string
+	Fetch     apply.FetchJSON
+	Updater   func(repo string) *apply.Updater
 }
 
 // DefaultEnv is the router's.

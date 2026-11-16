@@ -57,6 +57,10 @@ const cliUsage = `usage: firewall-cli COMMAND ...
                                     a kernel staged on the persistence partition, tried once
   kernel prepare [--version RELEASE] [--config CONFIG] | try [--no-reboot]
                                     Debian's newer kernel made ready to try; try it (reboots)
+  update check [CONFIG] | auto [CONFIG]
+                                    look for a newer release (auto: fr-update-check.timer)
+  update apply VERSION [--repo OWNER/NAME] | rollback [--repo OWNER/NAME]
+                                    install a signed release; go back to the one before
 
   --version                         print FR_OS's release
 
@@ -106,6 +110,11 @@ var cliCommands = []cliCommand{
 	{name: "kernel confirm-boot"},
 	{name: "kernel prepare", values: []string{"--version", "--config"}},
 	{name: "kernel try", flags: []string{"--no-reboot"}},
+	{name: "update check", config: true},
+	{name: "update auto", config: true},
+	{name: "update apply", values: []string{"--repo"}, positional: []string{"version"},
+		defaults: map[string]string{"--repo": apply.DefaultUpdateRepo}},
+	{name: "update rollback", values: []string{"--repo"}, defaults: map[string]string{"--repo": apply.DefaultUpdateRepo}},
 }
 
 type cliArgs struct {
@@ -154,7 +163,7 @@ func parseCLI(args []string, defaultConfig string) (*cliArgs, error) {
 	}
 	name := args[0]
 	rest := args[1:]
-	if name == "persistence" || name == "kernel" {
+	if name == "persistence" || name == "kernel" || name == "update" {
 		if len(rest) == 0 {
 			return nil, usageError("the following arguments are required: " + name + "_command")
 		}
@@ -277,8 +286,11 @@ func errorLine(err error) string {
 		ne *apply.NftError
 		ae *apply.Error
 		na *apply.NoAccountError
+		ue *apply.UpdateError
 	)
 	switch {
+	case errors.As(err, &ue):
+		return "update error: " + err.Error()
 	case errors.As(err, &ae): // first: it wraps the step's own error
 		return "apply error: " + err.Error()
 	case errors.As(err, &ce):
@@ -363,6 +375,9 @@ func (c *cli) run(a *cliArgs) (int, error) {
 		return code, err
 	}
 	if code, ok, err := c.kernel(a); ok {
+		return code, err
+	}
+	if code, ok, err := c.update(a); ok {
 		return code, err
 	}
 	return 2, nil

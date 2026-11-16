@@ -11,6 +11,7 @@
 #   scripts/  fr-first-boot.sh and install-system-integration.sh
 #   systemd/  the units, the journald and watchdog drop-ins and the
 #             kernel's IPv6 settings (sysctl.d)
+#   VERSION   the release it is, which the updater checks
 #
 # Run as the user who has the toolchains (go.mod's, rust-toolchain.toml's
 # with the x86_64-unknown-linux-musl target, the eBPF crate's nightly),
@@ -26,10 +27,12 @@ GO_BINARIES=(firewall-cli fr-apply-helper fr-apply-revert fr-update-helper fr-we
 RUST_BINARIES=(fr-ai-ids fr-appid fr-iot-scan fr-tls-fp fr-xdp fr-xdp-sni-logger)
 
 # The release this build is (version.Version): the repository's VERSION
-# file, X.Y.Z.
-VERSION="$(cat "$REPO_ROOT/VERSION")"
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: VERSION is not X.Y.Z: $VERSION" >&2
+# file, X.Y.Z or a beta X.Y.Z-beta.N. FROS_TEST_VERSION builds the same
+# commit as another version: the boot test's update to install (a test
+# build's, .github/workflows/build-installer.yml; never a release's).
+VERSION="${FROS_TEST_VERSION:-$(cat "$REPO_ROOT/VERSION")}"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+    echo "error: VERSION is not X.Y.Z or X.Y.Z-beta.N: $VERSION" >&2
     exit 1
 fi
 
@@ -55,6 +58,8 @@ done
 echo "==> The XDP program (crates/fros-xdp-ebpf)"
 (cd crates/fros-xdp-ebpf && cargo build --release --locked)
 install -m 0644 crates/fros-xdp-ebpf/target/bpfel-unknown-none/release/fros-xdp "$STAGE/bpf/xdp_sni_filter.o"
+
+printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
 echo "==> Scripts and units"
 install -m 0755 scripts/fr-first-boot.sh scripts/install-system-integration.sh "$STAGE/scripts/"

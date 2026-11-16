@@ -22,17 +22,21 @@ var releaseRE = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // Codename is frfw.codename_for: the codename of a release version, ""
 // for an unparsable one or a major version without a name. 0.1.0 up to
-// 1.0.0 included is Ice Breaker.
+// 1.0.0 included is Ice Breaker. A beta (2.0.0-beta.1) has its major
+// version's codename, which 1.x, without betas, has no case of.
 func Codename(v string) string {
-	m := releaseRE.FindStringSubmatch(config.PyStrip(v))
-	if m == nil {
-		return ""
+	v = config.PyStrip(v)
+	if m := releaseRE.FindStringSubmatch(v); m != nil {
+		major, minor, patch := trimZeros(m[1]), trimZeros(m[2]), trimZeros(m[3])
+		if major == "1" && minor == "0" && patch == "0" {
+			return codenamesByMajor["0"]
+		}
+		return codenamesByMajor[major]
 	}
-	major, minor, patch := trimZeros(m[1]), trimZeros(m[2]), trimZeros(m[3])
-	if major == "1" && minor == "0" && patch == "0" {
-		return codenamesByMajor["0"]
+	if r, ok := ParseRelease(v); ok && r.IsBeta() {
+		return codenamesByMajor[r.Major]
 	}
-	return codenamesByMajor[major]
+	return ""
 }
 
 // WithCodename is the version with its codename in quotes, as 1.x shows

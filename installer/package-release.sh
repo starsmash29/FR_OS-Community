@@ -8,15 +8,16 @@
 #
 # The tarball is the same bytes for the same stage: entries sorted, owned
 # by root, every mtime SOURCE_DATE_EPOCH (the commit's time in CI), gzip
-# without a name or time. Everything in it sits under fr_os-<VERSION>/.
+# without a name or time. Everything in it sits under fr_os-<VERSION>/,
+# VERSION being the release the stage says it is (its VERSION file, which
+# build-binaries.sh writes).
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAGE="$(cd "${1:?usage: package-release.sh STAGE_DIR OUT_DIR}" && pwd)"
 OUT="${2:?usage: package-release.sh STAGE_DIR OUT_DIR}"
-VERSION="$(cat "$REPO_ROOT/VERSION")"
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: VERSION is not X.Y.Z: $VERSION" >&2
+VERSION="$(cat "$STAGE/VERSION")"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+    echo "error: VERSION is not X.Y.Z or X.Y.Z-beta.N: $VERSION" >&2
     exit 1
 fi
 name="fr_os-$VERSION-amd64.tar.gz"

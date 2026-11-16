@@ -26,17 +26,21 @@ func TestPackageRelease(t *testing.T) {
 		t.Skip("no bash")
 	}
 	stage := t.TempDir()
+	version := strings.TrimSpace(read(t, "../VERSION"))
 	for name, mode := range map[string]os.FileMode{"bin/firewall-cli": 0o755, "systemd/fr-webui.service": 0o644,
-		"bpf/xdp_sni_filter.o": 0o644, "scripts/fr-first-boot.sh": 0o755} {
+		"bpf/xdp_sni_filter.o": 0o644, "scripts/fr-first-boot.sh": 0o755, "VERSION": 0o644} {
 		path := filepath.Join(stage, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(name), mode); err != nil {
+		body := name
+		if name == "VERSION" {
+			body = version + "\n"
+		}
+		if err := os.WriteFile(path, []byte(body), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
-	version := strings.TrimSpace(read(t, "../VERSION"))
 	name := release.TarballName(version)
 	var tarballs [][]byte
 	for range 2 {
@@ -143,6 +147,55 @@ func TestTheSigningKeyStaysInItsJobs(t *testing.T) {
 	}
 	if len(signing) != 2 || !signing["sign-stage"] || !signing["publish"] {
 		t.Errorf("the jobs with the key are %v, want sign-stage and publish", signing)
+	}
+}
+
+// A test build's throwaway key (phase 4f-4b) and the release it signs
+// for the boot test are a test build's only: every step that makes, uses
+// or names them runs only without release_tag, so a release's image
+// trusts the release keys alone and is never built from a test version.
+func TestTheBootTestKeyIsATestBuildsOnly(t *testing.T) {
+	doc, err := config.LoadYAML(read(t, "../.github/workflows/build-installer.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(v config.Value, key string) config.Value {
+		m, ok := v.(*config.Map)
+		if !ok {
+			return nil
+		}
+		x, _ := m.Get(key)
+		return x
+	}
+	jobs, _ := get(doc, "jobs").(*config.Map)
+	found := map[string]bool{}
+	for _, key := range jobs.Keys() {
+		name, _ := key.(string)
+		steps, _ := get(get(jobs, name), "steps").([]config.Value)
+		for _, step := range steps {
+			text, err := config.DumpYAML(step)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, marker := range []string{"boot-test.key", "boot-test.pem", "FROS_TEST_VERSION", "release-next"} {
+				if !strings.Contains(text, marker) {
+					continue
+				}
+				found[marker] = true
+				if get(step, "if") != "${{ inputs.release_tag == '' }}" && !strings.Contains(text, "[ -d release-next ]") {
+					t.Errorf("job %s: a step with %s runs on a release too:\n%s", name, marker, text)
+				}
+			}
+			if strings.Contains(text, "boot-test.key") && strings.Contains(text, "sign-sums") &&
+				!strings.Contains(text, `rm -f \"$RUNNER_TEMP/boot-test.key\"`) && !strings.Contains(text, `rm -f "$RUNNER_TEMP/boot-test.key"`) {
+				t.Errorf("job %s: the throwaway key outlives its signatures", name)
+			}
+		}
+	}
+	for _, marker := range []string{"boot-test.key", "boot-test.pem", "FROS_TEST_VERSION", "release-next"} {
+		if !found[marker] {
+			t.Errorf("no step has %s", marker)
+		}
 	}
 }
 

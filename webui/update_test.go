@@ -7,31 +7,10 @@ import (
 	"testing"
 )
 
-func TestReleaseVersionsCompareAsTuples(t *testing.T) {
-	for _, c := range []struct {
-		latest, current string
-		newer, parsed   bool
-	}{
-		{"9.9.9", "0.2.1", true, true},
-		{"0.2.1", "0.2.1", false, true},
-		{"0.10.0", "0.9.9", true, true},
-		{"v1.0.0", "0.2.1", true, true},
-		{"0.2.01", "0.2.1", false, true},
-		{"99999999999999999999.0.0", "2.0.0", true, true},
-		{"nightly", "0.2.1", false, false},
-		{"0.2.1 ", "0.2.1", false, false},
-	} {
-		newer, parsed := newerVersion(c.latest, c.current)
-		if newer != c.newer || parsed != c.parsed {
-			t.Errorf("newerVersion(%q, %q) = %v, %v", c.latest, c.current, newer, parsed)
-		}
-	}
-}
-
 func TestCodenamesAreTheReleaseCycles(t *testing.T) {
 	for version, want := range map[string]string{
 		"0.2.1": "Ice Breaker", "1.0.0": "Ice Breaker", "v1.0.1": "Idun", "2.0.0": "Ivar",
-		" 2.3.4\n": "Ivar", "5.0.0": "", "2.0": "", "": "",
+		" 2.3.4\n": "Ivar", "5.0.0": "", "2.0": "", "": "", "2.0.0-beta.1": "Ivar", "2.0.0-rc.1": "",
 	} {
 		if got := codenameFor(version); got != want {
 			t.Errorf("codenameFor(%q) = %q, want %q", version, got, want)

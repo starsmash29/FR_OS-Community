@@ -24,13 +24,12 @@ import (
 // and every connection's peer uid is checked again here, since what it
 // does reboots the router.
 //
-// It runs the kernel side of the screen (ROADMAP SEC-14): what kernel
-// runs and which is ready to try, "check now" (starts
-// fr-kernel-prepare.service), "try it" -- stage the prepared kernel and
-// reboot into its trial, the one reboot FR_OS asks for, and only an
-// admin's -- and cancelling a staged one. 1.x's signed release update
-// (apply, rollback) is phase 4f-4's: until then those are unknown here
-// (decisions.md, "phase 4f-3b").
+// It installs a signed release and rolls back to the one before
+// (apply.Updater, phase 4f-4b), and runs the kernel side of the screen
+// (ROADMAP SEC-14): what kernel runs and which is ready to try, "check
+// now" (starts fr-kernel-prepare.service), "try it" -- stage the
+// prepared kernel and reboot into its trial, the one reboot FR_OS asks
+// for, and only an admin's -- and cancelling a staged one.
 
 // UpdateSocketPath is where the update-helper listens.
 const UpdateSocketPath = "/run/fr_os/update.sock"
@@ -53,6 +52,11 @@ type UpdateServer struct {
 	// RebootSoon reboots once the answer is sent (nil: systemctl
 	// reboot, rebootDelay later).
 	RebootSoon func()
+	// Repo is where releases are installed from (1.x's --repo, its
+	// DEFAULT_REPO unless given). Updater makes the installer of a
+	// request (nil: apply.NewUpdater).
+	Repo    string
+	Updater func() *apply.Updater
 
 	run sync.Mutex
 	wg  sync.WaitGroup
@@ -61,7 +65,7 @@ type UpdateServer struct {
 // NewUpdateServer is the router's.
 func NewUpdateServer() *UpdateServer {
 	return &UpdateServer{Sys: apply.DefaultSystem(), Policy: SystemPolicy, Log: os.Stderr,
-		ReadTimeout: 30 * time.Second, MaxConns: 8}
+		ReadTimeout: 30 * time.Second, MaxConns: 8, Repo: apply.DefaultUpdateRepo}
 }
 
 // Serve answers connections on l until it is closed.
@@ -129,13 +133,14 @@ func (u *UpdateServer) Answer(r *bufio.Reader, pid, uid int) (any, error) {
 	}
 	u.run.Lock()
 	defer u.run.Unlock()
-	reply, err := u.Dispatch(cmd)
+	reply, err := u.DispatchRequest(request)
 	var (
 		ue *apply.KernelUpdateError
 		be *apply.KernelBootError
+		re *apply.UpdateError
 	)
 	switch {
-	case errors.As(err, &ue) || errors.As(err, &be):
+	case errors.As(err, &ue) || errors.As(err, &be) || errors.As(err, &re):
 		return message(false, err.Error()), nil
 	case err != nil:
 		return nil, errNoReply
@@ -149,8 +154,42 @@ type kernelReply struct {
 	Kernel apply.KernelOverview `json:"kernel"`
 }
 
-// Dispatch runs one command; an error is one 1.x reports (a
-// KernelUpdateError or KernelBootError) or one it sends no reply for.
+// DispatchRequest runs one request: apply and rollback with what they
+// take, the rest by Dispatch.
+func (u *UpdateServer) DispatchRequest(request *config.Map) (any, error) {
+	cmd, _ := request.Get("cmd")
+	switch cmd {
+	case "apply":
+		v, _ := request.Get("version")
+		target, ok := v.(string)
+		if !ok || target == "" {
+			return message(false, "'version' must be a non-empty string"), nil
+		}
+		installed, err := u.updater().Apply(target)
+		if err != nil {
+			return nil, err
+		}
+		return message(true, "Updated to "+installed), nil
+	case "rollback":
+		restored, err := u.updater().Rollback()
+		if err != nil {
+			return nil, err
+		}
+		return message(true, "Rolled back to "+restored), nil
+	}
+	return u.Dispatch(cmd)
+}
+
+func (u *UpdateServer) updater() *apply.Updater {
+	if u.Updater != nil {
+		return u.Updater()
+	}
+	return apply.NewUpdater(u.Sys, u.Repo)
+}
+
+// Dispatch runs one command; an error is one 1.x reports (an
+// UpdateError, KernelUpdateError or KernelBootError) or one it sends no
+// reply for.
 func (u *UpdateServer) Dispatch(cmd config.Value) (any, error) {
 	sys := u.Sys
 	name, _ := cmd.(string)

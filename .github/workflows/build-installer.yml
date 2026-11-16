@@ -11,8 +11,10 @@ name: Build installer ISO
 # FROS_RELEASE_SIGNING_KEY secret of the `release` environment, which
 # only v* tags may deploy to: only the two signing jobs get it, only when
 # the run is for a release; the jobs that build and boot the image never
-# see it. A run on a branch or a pull request is a test build, unsigned
-# throughout. A release is built from exactly the commit its tag names,
+# see it. A run on a branch or a pull request is a test build: never
+# signed with the release key; its release tarballs are signed with a key
+# made for the run and thrown away, which only its own image trusts, so
+# the boot test can install a release and roll back. A release is built from exactly the commit its tag names,
 # with the version its VERSION file says, and only after two different
 # models reviewed it (security-lessons J2, release/reviewgate) -- as 1.x's
 # workflow.
@@ -100,6 +102,19 @@ jobs:
           RUSTFLAGS="-L $lib -l dylib=${llvm#lib} -C link-arg=-Wl,-rpath,$lib" \
             cargo install bpf-linker --version 0.13.0 --locked --no-default-features --features llvm-23,no-llvm-linking
 
+      # A test build's own key, made for this run and thrown away at its
+      # end: the image it builds trusts it besides the release keys, so
+      # the boot test can install a signed release and roll back to the
+      # image's own (phase 4f-4b). Never on a release, whose image trusts
+      # the release keys alone.
+      - name: The boot test's throwaway signing key (test builds only)
+        if: ${{ inputs.release_tag == '' }}
+        run: |
+          umask 077
+          openssl genpkey -algorithm ed25519 -out "$RUNNER_TEMP/boot-test.key"
+          openssl pkey -in "$RUNNER_TEMP/boot-test.key" -pubout -out release/keys/boot-test.pem
+          chmod 0644 release/keys/boot-test.pem
+
       - name: Build what the image installs (installer/build-binaries.sh)
         run: installer/build-binaries.sh "$RUNNER_TEMP/stage"
 
@@ -107,10 +122,35 @@ jobs:
         # Every mtime is the commit's: the same commit packs the same bytes.
         run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" installer/package-release.sh "$RUNNER_TEMP/stage" release
 
+      # The release the boot test installs: the same programs as the next
+      # version's beta (FROS_TEST_VERSION, never a release's), and both
+      # tarballs signed with the throwaway key, which goes with the job.
+      - name: The boot test's next release, both signed (test builds only)
+        if: ${{ inputs.release_tag == '' }}
+        run: |
+          version=$(cat VERSION)
+          case "$version" in
+            *-beta.*) next="${version%.*}.$(( ${version##*.} + 1 ))" ;;
+            *) next="${version%.*}.$(( ${version##*.} + 1 ))-beta.1" ;;
+          esac
+          FROS_TEST_VERSION="$next" installer/build-binaries.sh "$RUNNER_TEMP/stage-next"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" installer/package-release.sh "$RUNNER_TEMP/stage-next" release-next
+          SIGNING_KEY="$(cat "$RUNNER_TEMP/boot-test.key")" ./scripts/sign-sums.sh release/SHA256SUMS
+          SIGNING_KEY="$(cat "$RUNNER_TEMP/boot-test.key")" ./scripts/sign-sums.sh release-next/SHA256SUMS
+          rm -f "$RUNNER_TEMP/boot-test.key"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: release-unsigned
+          # A release's goes to sign-stage; a test build's is signed with
+          # the throwaway key.
+          name: ${{ inputs.release_tag != '' && 'release-unsigned' || 'release-test' }}
           path: release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: ${{ inputs.release_tag == '' }}
+        with:
+          name: release-next-test
+          path: release-next/
           if-no-files-found: error
 
   # The one job besides `publish` that holds the signing key: it signs the
@@ -172,9 +212,15 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
-          # A release's signed tarball; a test build's unsigned one.
-          name: ${{ inputs.release_tag != '' && 'release-signed' || 'release-unsigned' }}
+          # A release's tarball signed with the release key; a test
+          # build's with its throwaway key.
+          name: ${{ inputs.release_tag != '' && 'release-signed' || 'release-test' }}
           path: release
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        if: ${{ inputs.release_tag == '' }}
+        with:
+          name: release-next-test
+          path: release-next
 
       - name: Build hybrid live/installer ISO
         run: sudo ./installer/build-live-image.sh --release "$PWD/release"
@@ -208,19 +254,26 @@ jobs:
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
           cat SHA256SUMS
 
-      - name: Boot test in QEMU with BIOS (persistence, first boot, webUI, fallback)
+      - name: Boot test in QEMU with BIOS (persistence, first boot, webUI, fallback, kernel, update)
         if: ${{ env.BOOT_TEST == 'true' }}
         run: |
           # radvd and kea-dhcp6 are the test's IPv6 provider on the WAN
           # (ROADMAP FND-1a): RA, DHCPv6 and prefix delegation.
           sudo apt-get install -y qemu-system-x86 ovmf radvd kea-dhcp6-server wireguard-tools
-          sudo python3 installer/qemu-boot-test.py "${{ steps.iso.outputs.name }}" --kvm --workdir qemu-test
+          next=""
+          if [ -d release-next ]; then next="--next-release $PWD/release-next"; fi
+          # shellcheck disable=SC2086 # $next is one option and its value, or nothing
+          sudo python3 installer/qemu-boot-test.py "${{ steps.iso.outputs.name }}" --kvm --workdir qemu-test $next
 
       # The same boots from a fresh stick with UEFI firmware (OVMF): both
       # firmwares boot from the same GRUB menu.
       - name: Boot test in QEMU with UEFI
         if: ${{ env.BOOT_TEST == 'true' }}
-        run: sudo python3 installer/qemu-boot-test.py "${{ steps.iso.outputs.name }}" --kvm --uefi --workdir qemu-test-uefi
+        run: |
+          next=""
+          if [ -d release-next ]; then next="--next-release $PWD/release-next"; fi
+          # shellcheck disable=SC2086 # $next is one option and its value, or nothing
+          sudo python3 installer/qemu-boot-test.py "${{ steps.iso.outputs.name }}" --kvm --uefi --workdir qemu-test-uefi $next
 
       - name: Upload QEMU logs
         if: ${{ always() && env.BOOT_TEST == 'true' }}

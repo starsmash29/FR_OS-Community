@@ -1,5 +1,6 @@
 // Command fr-update-helper is FR_OS's root update-helper (package
-// helper, UpdateServer): the kernel side of the webUI's Update screen,
+// helper, UpdateServer): the root side of the webUI's Update screen --
+// installing and rolling back a signed release, and the kernel's --
 // over /run/fr_os/update.sock, for root and fr_os-webui only. systemd
 // starts it by socket activation (systemd/fr-update-helper.socket); run
 // by hand, it binds the socket itself.
@@ -12,6 +13,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/starsmash29/fr_os-community/apply"
 	"github.com/starsmash29/fr_os-community/helper"
 )
 
@@ -22,6 +24,7 @@ func main() {
 func run(args []string) int {
 	flags := flag.NewFlagSet("fr-update-helper", flag.ContinueOnError)
 	socket := flags.String("socket", helper.UpdateSocketPath, "the socket to bind when systemd passes none")
+	repo := flags.String("repo", apply.DefaultUpdateRepo, "the GitHub repository releases are installed from")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -30,6 +33,7 @@ func run(args []string) int {
 		return 2
 	}
 	u := helper.NewUpdateServer()
+	u.Repo = *repo
 	l, err := helper.Listen(*socket)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fr-update-helper: %v\n", err)

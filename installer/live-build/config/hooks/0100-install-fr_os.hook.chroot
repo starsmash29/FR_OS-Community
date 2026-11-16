@@ -11,16 +11,27 @@ set -e
 
 STAGE=/opt/fr_os-stage
 LIBEXEC=/usr/libexec/fr_os
+VERSION="$(cat "$STAGE/VERSION")"
+# Each release's programs and scripts are a directory of their own, and
+# /usr/libexec/fr_os -- where every unit runs them from -- a symlink to
+# the one in use: the updater installs the next release beside this one
+# and switches the symlink in one rename (apply/update.go).
+RELEASE_DIR="/usr/libexec/fr_os-releases/$VERSION"
 
-echo "fr_os: installing the binaries into $LIBEXEC..."
-install -d -m 0755 "$LIBEXEC"
+echo "fr_os: installing the binaries of $VERSION into $RELEASE_DIR..."
+install -d -m 0755 "$RELEASE_DIR"
 for bin in "$STAGE"/bin/*; do
-    install -m 0755 "$bin" "$LIBEXEC/"
+    install -m 0755 "$bin" "$RELEASE_DIR/"
 done
-install -m 0755 "$STAGE/scripts/fr-first-boot.sh" "$LIBEXEC/fr-first-boot.sh"
-install -m 0755 "$STAGE/scripts/install-system-integration.sh" "$LIBEXEC/install-system-integration.sh"
+install -m 0755 "$STAGE/scripts/fr-first-boot.sh" "$RELEASE_DIR/fr-first-boot.sh"
+install -m 0755 "$STAGE/scripts/install-system-integration.sh" "$RELEASE_DIR/install-system-integration.sh"
+install -m 0644 "$STAGE/VERSION" "$RELEASE_DIR/VERSION"
+ln -sfn "fr_os-releases/$VERSION" "$LIBEXEC"
 # `firewall-cli` on the console's PATH, as 1.x's was.
 ln -sf "$LIBEXEC/firewall-cli" /usr/sbin/firewall-cli
+# Where the updater keeps the releases it verified (the image's own is
+# put there by build-live-image.sh --release), for a rollback offline.
+install -d -m 0755 /opt/fr_os/releases
 
 # The XDP SNI filter's program (ROADMAP P4-1), compiled by the image
 # build from crates/fros-xdp-ebpf: fr-xdp loads exactly this file

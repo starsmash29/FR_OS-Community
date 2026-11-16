@@ -93,8 +93,7 @@ fi
 # Each unit on its own: one that fails to start is reported and stays
 # enabled (systemd retries it every boot), but doesn't stop the others --
 # nor leave first boot unfinished, which would rerun it (and replace the
-# admin password) at every boot. 1.x's fr-update-check.timer comes with
-# phase 4f-4.
+# admin password) at every boot.
 FAILED_UNITS=()
 for unit in \
     fr-firewall \
@@ -105,6 +104,7 @@ for unit in \
     fr-xdp-sni-logger \
     fr-appid \
     fr-schedule-check.timer \
+    fr-update-check.timer \
     fr-dns-log-trim.timer \
     fr-adblock-refresh.timer \
     fr-tls-fp \
