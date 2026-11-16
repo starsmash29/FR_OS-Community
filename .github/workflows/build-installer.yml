@@ -5,12 +5,25 @@ name: Build installer ISO
 # (tens of minutes, real bandwidth), so it runs by hand from the Actions
 # tab, and on a pull request only when what goes into the image changes.
 #
-# Test builds only: the ISO is unsigned. Signing a release and publishing
-# it come with phase 4f-4 (the release signing key is never here).
+# Releases (docs/RELEASING.md): run it *from the release's tag* ("Use
+# workflow from" -> Tags -> vX.Y.Z) with release_tag = vX.Y.Z, for a
+# GitHub release that already exists. The release signing key is the
+# FROS_RELEASE_SIGNING_KEY secret of the `release` environment, which
+# only v* tags may deploy to: only the two signing jobs get it, only when
+# the run is for a release; the jobs that build and boot the image never
+# see it. A run on a branch or a pull request is a test build, unsigned
+# throughout. A release is built from exactly the commit its tag names,
+# with the version its VERSION file says, and only after two different
+# models reviewed it (security-lessons J2, release/reviewgate) -- as 1.x's
+# workflow.
 
 on:
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: "Publish to this existing release (e.g. v2.0.0) -- run the workflow from that tag; empty = test build, unsigned"
+        required: false
+        default: ""
       boot_test:
         description: "Boot the ISO in QEMU with BIOS and with UEFI (installer/qemu-boot-test.py)"
         type: boolean
@@ -20,28 +33,61 @@ on:
       - "installer/**"
       - "scripts/**"
       - "systemd/**"
+      - "release/**"
+      - "version/**"
+      - "VERSION"
       - ".github/workflows/build-installer.yml"
 
+# Nothing may write unless its job says so (only `publish` does).
 permissions:
   contents: read
 
 jobs:
-  image:
+  # The programs the image installs and a router's updater takes, packed
+  # into the release tarball (installer/package-release.sh) -- without
+  # the signing key.
+  stage:
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
     env:
       CGO_ENABLED: "0"
-      BOOT_TEST: ${{ github.event_name == 'pull_request' || inputs.boot_test }}
     steps:
-      - uses: actions/checkout@v4
-
-      # The toolchains, as ci.yml's: Go from go.mod, Rust from
-      # rust-toolchain.toml (with the musl target the image's binaries
-      # are linked against), the eBPF crate's nightly and bpf-linker.
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0  # the review gate compares commits and tags
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Release gate -- the tag, the commit, the adversarial review (security-lessons J2)
+        # Checked first, before the toolchains and the build: a release is
+        # built from its tag (the commit the tag names is the commit
+        # checked out here), its version is the tag's, and at least two
+        # different AI models reviewed it with every critical or high
+        # finding closed (docs/RELEASING.md, "Before tagging").
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          version=$(cat VERSION)
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "::error::release_tag $RELEASE_TAG doesn't match the VERSION file (v$version)"
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/tags/$RELEASE_TAG" ]; then
+            echo "::error::a release is built from its tag: run this workflow from $RELEASE_TAG, not $GITHUB_REF"
+            exit 1
+          fi
+          tag_sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          if [ "$tag_sha" != "$GITHUB_SHA" ] || [ "$(git rev-parse HEAD)" != "$tag_sha" ]; then
+            echo "::error::$RELEASE_TAG names $tag_sha, but this run checked out $GITHUB_SHA"
+            exit 1
+          fi
+          go run ./release/reviewgate "$version"
+
+      # The other toolchains, as ci.yml's: Rust from
+      # rust-toolchain.toml (with the musl target the image's binaries
+      # are linked against), the eBPF crate's nightly and bpf-linker.
       - name: Rust toolchains
         run: |
           rustup show active-toolchain || rustup toolchain install
@@ -57,6 +103,61 @@ jobs:
       - name: Build what the image installs (installer/build-binaries.sh)
         run: installer/build-binaries.sh "$RUNNER_TEMP/stage"
 
+      - name: Pack the release tarball (installer/package-release.sh)
+        # Every mtime is the commit's: the same commit packs the same bytes.
+        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" installer/package-release.sh "$RUNNER_TEMP/stage" release
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-unsigned
+          path: release/
+          if-no-files-found: error
+
+  # The one job besides `publish` that holds the signing key: it signs the
+  # tarball's SHA256SUMS *before* the image is built, because the image
+  # carries its own signed release (/opt/fr_os/releases/<VERSION>/) and
+  # the published SHA256SUMS can't be inside the ISO it covers. It runs
+  # the tag's own scripts/sign-sums.sh, which refuses a key whose public
+  # half this commit doesn't ship and checks the signature as a router
+  # will.
+  sign-stage:
+    if: ${{ inputs.release_tag != '' }}
+    needs: stage
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: release-unsigned
+          path: release
+      - name: Sign the tarball's SHA256SUMS
+        env:
+          SIGNING_KEY: ${{ secrets.FROS_RELEASE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: ./scripts/sign-sums.sh release/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-signed
+          path: release/
+          if-no-files-found: error
+
+  # Builds and boot-tests the image from the release tarball -- with no
+  # access to the signing key.
+  image:
+    needs: [stage, sign-stage]
+    if: ${{ !cancelled() && needs.stage.result == 'success' && (needs.sign-stage.result == 'success' || needs.sign-stage.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      BOOT_TEST: ${{ github.event_name == 'pull_request' || inputs.boot_test }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
       - name: Install live-build tooling
         run: |
           sudo apt-get update
@@ -69,23 +170,42 @@ jobs:
             grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools \
             debian-archive-keyring
 
-      - name: Build hybrid live/installer ISO
-        run: sudo ./installer/build-live-image.sh --stage "$RUNNER_TEMP/stage"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          # A release's signed tarball; a test build's unsigned one.
+          name: ${{ inputs.release_tag != '' && 'release-signed' || 'release-unsigned' }}
+          path: release
 
-      - name: Name the ISO
+      - name: Build hybrid live/installer ISO
+        run: sudo ./installer/build-live-image.sh --release "$PWD/release"
+
+      - name: Name the ISO, list the files to publish
         id: iso
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          name="FR_OS-2.0.0-dev-${GITHUB_SHA::12}-amd64.iso"
+          version=$(cat VERSION)
+          if [ -n "$RELEASE_TAG" ]; then
+            name="FR_OS-${version}-amd64.iso"
+            kind="FR_OS ${version}"
+          else
+            name="FR_OS-${version}-dev-${GITHUB_SHA::12}-amd64.iso"
+            kind="FR_OS test build (unsigned)"
+          fi
           sudo mv installer/live-build/binary.hybrid.iso "$name"
           sudo chown "$(id -u):$(id -g)" "$name"
+          # The very tarball the image installed and carries.
+          tarball="fr_os-${version}-amd64.tar.gz"
+          cp "release/$tarball" "$tarball"
+          sha256sum "$name" "$tarball" > SHA256SUMS
           {
-            sha256sum "$name"
             echo
-            echo "# FR_OS test build (unsigned) -- hybrid BIOS/UEFI live image, amd64."
+            echo "# ${kind} -- hybrid BIOS/UEFI live image, amd64, and the release tarball its updater installs."
             echo "# Built by GitHub Actions from commit ${GITHUB_SHA} (${GITHUB_REF_NAME})."
             echo "# Verify: sha256sum -c SHA256SUMS"
-          } > SHA256SUMS
+          } >> SHA256SUMS
           echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
           cat SHA256SUMS
 
       - name: Boot test in QEMU with BIOS (persistence, first boot, webUI, fallback)
@@ -104,7 +224,7 @@ jobs:
 
       - name: Upload QEMU logs
         if: ${{ always() && env.BOOT_TEST == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: qemu-boot-test-logs
           path: |
@@ -113,10 +233,51 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload ISO artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: fr-os-installer
           path: |
             ${{ steps.iso.outputs.name }}
+            ${{ steps.iso.outputs.tarball }}
             SHA256SUMS
           if-no-files-found: error
+
+  # Signs the published SHA256SUMS (the ISO and the tarball) and attaches
+  # the files to the release -- the second job with the key, and the only
+  # one that may write to the repository.
+  publish:
+    if: ${{ inputs.release_tag != '' }}
+    needs: image
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: fr-os-installer
+          path: dist
+      - name: Sign SHA256SUMS
+        # A release must be signed: routers refuse an update whose
+        # SHA256SUMS.sig doesn't verify (docs/RELEASING.md). Only what a
+        # router will accept is published: the key must be one this very
+        # commit ships, and the signature must verify (scripts/sign-sums.sh).
+        env:
+          SIGNING_KEY: ${{ secrets.FROS_RELEASE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: ./scripts/sign-sums.sh dist/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: fr-os-release
+          path: dist/
+          if-no-files-found: error
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

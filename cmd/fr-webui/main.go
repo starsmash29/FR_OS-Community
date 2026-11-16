@@ -25,12 +25,9 @@ import (
 
 	"github.com/starsmash29/fr_os-community/apply"
 	"github.com/starsmash29/fr_os-community/config"
+	"github.com/starsmash29/fr_os-community/version"
 	"github.com/starsmash29/fr_os-community/webui"
 )
-
-// version is the installed release, set at build time
-// (-ldflags "-X main.version=...").
-var version = "0.0.0-dev"
 
 // shutdownGrace is how long a stopping webUI waits for open requests
 // before closing them: a live-log tab is a request that never ends, and
@@ -95,7 +92,7 @@ func run(args []string) int {
 
 	env := webui.DefaultEnv()
 	env.Paths.ConfigFile = *configPath
-	handler, err := webui.New(env, version, "")
+	handler, err := webui.New(env, version.Version, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fr-webui: %v\n", err)
 		return 1

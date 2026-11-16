@@ -6,7 +6,7 @@ is updated on three levels, and each one keeps you in control.
 | Level | How | State in this version |
 | --- | --- | --- |
 | **Debian's security fixes** (OpenSSL, OpenSSH, dnsmasq, Kea, nftables and the rest of userspace) | `unattended-upgrades`, daily, from Debian's security suite only, without reboots, into the persistent root | Works |
-| **The kernel** | Debian's kernel fixes are fetched, prepared, and tried once at a reboot you start; the router keeps the new kernel only if it comes up working | Arrives with a later 2.0 phase |
+| **The kernel** | Debian's kernel fixes are fetched, prepared, and tried once at a reboot you start; the router keeps the new kernel only if it comes up working | Works |
 | **FR_OS itself** | Signed releases, installed from the **Update** screen, or automatically for security releases | The Update screen checks; installing arrives with a later 2.0 phase |
 
 ## Debian security updates
@@ -26,6 +26,23 @@ Releases are published on the project's GitHub releases. Each carries a
 `SHA256SUMS` file and its Ed25519 signature `SHA256SUMS.sig`; a router
 refuses a release whose signature doesn't verify against the public key
 it ships with. No setting, flag or request can turn that check off.
+The keys are compiled into FR_OS's programs, so there is no file on the
+router to add one to.
+
+Each release has two downloads: the ISO, and
+`fr_os-<version>-amd64.tar.gz`, the programs, scripts and units the image
+installs and the updater installs. Every image keeps the tarball it was
+built from, with its `SHA256SUMS` (and signature), under
+`/opt/fr_os/releases/<version>/`. `firewall-cli --version` prints the
+installed release.
+
+To check a download on another computer, with the public key from the
+repository's `release/keys/`:
+
+```bash
+openssl pkeyutl -verify -pubin -inkey fros-release-2.pem -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+sha256sum -c --ignore-missing SHA256SUMS
+```
 
 The **Update** screen shows the installed version, and the latest release
 of `update.repo` (FR_OS's own repository by default), which it asks

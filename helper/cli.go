@@ -14,6 +14,7 @@ import (
 	"github.com/starsmash29/fr_os-community/config"
 	"github.com/starsmash29/fr_os-community/nft"
 	"github.com/starsmash29/fr_os-community/render"
+	"github.com/starsmash29/fr_os-community/version"
 )
 
 // firewall-cli: the commands the router's units run as root (1.x's
@@ -56,6 +57,8 @@ const cliUsage = `usage: firewall-cli COMMAND ...
                                     a kernel staged on the persistence partition, tried once
   kernel prepare [--version RELEASE] [--config CONFIG] | try [--no-reboot]
                                     Debian's newer kernel made ready to try; try it (reboots)
+
+  --version                         print FR_OS's release
 
 CONFIG defaults to /etc/fr_os/config.yaml.
 `
@@ -244,6 +247,10 @@ func parseCLI(args []string, defaultConfig string) (*cliArgs, error) {
 // CLI runs firewall-cli with args (without the program's name), printing
 // to stdout and stderr, and returns its exit status.
 func (s *Server) CLI(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--version" { // argparse's action="version"
+		fmt.Fprintln(stdout, "FR_OS "+version.WithCodename(version.Version))
+		return 0
+	}
 	a, err := parseCLI(args, s.sys().Paths.Config)
 	if err != nil {
 		fmt.Fprint(stderr, cliUsage)

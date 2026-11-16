@@ -6,11 +6,18 @@
 # to add real UEFI boot support on top of `lb build`'s own BIOS-only
 # image (see that script's header for why).
 #
+#   sudo installer/build-live-image.sh --release DIR
 #   sudo installer/build-live-image.sh --stage DIR
 #
-# DIR is what installer/build-binaries.sh built, as the user with the
-# toolchains (the CI's build). Without --stage it runs build-binaries.sh
-# itself, which then needs the toolchains on root's PATH.
+# --release DIR (the CI's build) names a directory with the release
+# tarball installer/package-release.sh made, its SHA256SUMS and, when the
+# build is signed, SHA256SUMS.sig: the image installs exactly what the
+# tarball holds and keeps the three files under /opt/fr_os/releases/
+# <VERSION>/, the release a router's updater can go back to without the
+# network (1.x's ROADMAP SEC-15). --stage DIR is what
+# installer/build-binaries.sh built, as the user with the toolchains.
+# With neither it runs build-binaries.sh itself, which then needs the
+# toolchains on root's PATH.
 #
 # Must run as root: live-build chroots, mounts, and device nodes all need
 # it. Needs `live-build`, `debootstrap`, `xorriso`, `squashfs-tools`,
@@ -32,9 +39,6 @@
 # same kind of build-host-only tool, needed by
 # installer/make-hybrid-uefi-iso.sh (grub-mkstandalone, mkfs.vfat,
 # mmd/mcopy) rather than by anything inside the chroot.
-#
-# The image is unsigned: signing a release (and the update path that
-# checks it) is phase 4f-4.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,12 +64,28 @@ unset PIP_CERT REQUESTS_CA_BUNDLE CURL_CA_BUNDLE SSL_CERT_FILE \
     HEX_CACERTS_PATH
 
 STAGE_SOURCE=""
-if [[ "${1:-}" == "--stage" ]]; then
-    STAGE_SOURCE="$(cd "$2" && pwd)"
-fi
-rm -rf "$STAGE_DIR"
+RELEASE_SOURCE=""
+case "${1:-}" in
+    --stage) STAGE_SOURCE="$(cd "$2" && pwd)" ;;
+    --release) RELEASE_SOURCE="$(cd "$2" && pwd)" ;;
+esac
+RELEASES_STAGE="$LB_DIR/config/includes.chroot/opt/fr_os/releases"
+rm -rf "$STAGE_DIR" "$RELEASES_STAGE"
 mkdir -p "$(dirname "$STAGE_DIR")"
-if [[ -n "$STAGE_SOURCE" ]]; then
+if [[ -n "$RELEASE_SOURCE" ]]; then
+    version="$(cat "$REPO_ROOT/VERSION")"
+    tarball="$RELEASE_SOURCE/fr_os-$version-amd64.tar.gz"
+    echo "==> Staging the release $tarball into $STAGE_DIR"
+    (cd "$RELEASE_SOURCE" && sha256sum --check --ignore-missing --strict SHA256SUMS)
+    mkdir -p "$STAGE_DIR"
+    tar -xzf "$tarball" -C "$STAGE_DIR" --strip-components=1
+    install -d -m 0755 "$RELEASES_STAGE/$version"
+    for name in "$(basename "$tarball")" SHA256SUMS SHA256SUMS.sig; do
+        if [[ -f "$RELEASE_SOURCE/$name" ]]; then
+            install -m 0644 "$RELEASE_SOURCE/$name" "$RELEASES_STAGE/$version/$name"
+        fi
+    done
+elif [[ -n "$STAGE_SOURCE" ]]; then
     echo "==> Staging $STAGE_SOURCE into $STAGE_DIR"
     cp -a "$STAGE_SOURCE" "$STAGE_DIR"
 else

@@ -104,6 +104,15 @@ import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
+#: The release the image is (the repository's VERSION file, stamped into
+#: the binaries by installer/build-binaries.sh).
+VERSION = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+#: Where the image keeps the release tarball it was built from, with its
+#: SHA256SUMS (installer/build-live-image.sh --release).
+RELEASE_DIR = Path("opt/fr_os/releases") / VERSION
+#: The release's codename as the webUI shows it (version.WithCodename).
+VERSION_SHOWN = f"{VERSION} \u201cIvar\u201d" if VERSION.startswith("2.") else VERSION
+
 #: The router's LAN address, reached over the host's tap device.
 WEBUI_HOST = "10.73.1.1"
 WEBUI_PORT = 443
@@ -2330,6 +2339,11 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
         score = re.search(r'id="score">(\d+)%', score_page)
         check(score is not None, "the security score page works on the real router (security-lessons K8)"
               + (f": {score.group(1)}%" if score else ""))
+        # Phase 4f-4a: the programs say the release they were built as.
+        installed = re.search(r'Installed: <span class="badge">([^<]*)</span>', get(opener, "/update"))
+        check(installed is not None and html.unescape(installed.group(1)) == VERSION_SHOWN,
+              f"the Update screen shows the release the image is, {VERSION_SHOWN}: "
+              + (html.unescape(installed.group(1)) if installed else "no Installed line"))
         # ROADMAP FND-1a: the provider's RAs have been on the WAN since
         # boot 1; with IPv6 off the router took none of them, answers
         # nothing over IPv6 and asked the provider for nothing.
@@ -2565,6 +2579,14 @@ def run(args: argparse.Namespace, provider: Isp) -> int:
             # work out of the box.
             check(any((root / "lib" / "firmware" / "rtl_nic").glob("rtl8168*")),
                   "the image carries the Realtek NIC firmware (lib/firmware/rtl_nic)")
+            # Phase 4f-4a: the image carries the release tarball it was
+            # built from, listed in its SHA256SUMS (signed for a release).
+            kept = root / RELEASE_DIR
+            tarball = kept / f"fr_os-{VERSION}-amd64.tar.gz"
+            listed = (kept / "SHA256SUMS").read_text().split() if (kept / "SHA256SUMS").exists() else []
+            digest = hashlib.sha256(tarball.read_bytes()).hexdigest() if tarball.exists() else None
+            check(digest is not None and digest in listed,
+                  f"the image carries the release tarball it installed, with its SHA256SUMS (/{RELEASE_DIR})")
             # The kernel takes no RA and makes no SLAAC address of its
             # own, on any interface, from boot on: dhcpcd reads the WAN's
             # RA (boot 3's RFC 7217 check; decisions.md, "the kernel's RA
